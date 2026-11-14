@@ -131,8 +131,8 @@ fn draw_rim(img: &mut RgbaImage, rgb: [u8; 3], width: u32, radius: u32) {
             let (qx, qy) = ((x as f32 + 0.5 - cx).abs() - hx, (y as f32 + 0.5 - cy).abs() - hy);
             let outside = qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - r;
             let inside = -outside;
-            // solid rim of `width`, then a short soft fade toward the picture
-            let a = if inside < width as f32 { 1.0 } else if inside < width as f32 + 6.0 { 1.0 - (inside - width as f32) / 6.0 } else { 0.0 };
+            // solid rim of `width` with a crisp edge (1 px antialiasing only)
+            let a = (width as f32 + 0.5 - inside).clamp(0.0, 1.0);
             // outside the rounded corner the tile goes black (with a 1 px antialiased edge)
             let cover = (0.5 + inside).clamp(0.0, 1.0);
             let p = img.get_pixel_mut(x, y);
