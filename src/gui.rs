@@ -799,6 +799,11 @@ fn paint_tile(p: &egui::Painter, rect: Rect, b: Option<&Button>, tex: Option<&eg
 }
 
 impl eframe::App for App {
+    /// Closing the window must not cut a transfer to the deck in half (that wedges it until the cable is replugged).
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.svc.shutdown(std::time::Duration::from_secs(4));
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
 

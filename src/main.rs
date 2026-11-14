@@ -172,6 +172,18 @@ fn main() {
         }
         Some("serve") => {
             let ctx = service::Ctx::new(true, Arc::new(|| {}));
+            // Ctrl+C / closing the console: let the service finish its transfer and release the deck before the process dies
+            static HANDLER_CTX: std::sync::OnceLock<service::Ctx> = std::sync::OnceLock::new();
+            unsafe extern "system" fn on_ctrl(_kind: u32) -> i32 {
+                if let Some(c) = HANDLER_CTX.get() {
+                    c.shutdown(Duration::from_secs(4));
+                }
+                0 // not handled: Windows then ends the process as usual
+            }
+            let _ = HANDLER_CTX.set(ctx.clone());
+            unsafe {
+                windows_sys::Win32::System::Console::SetConsoleCtrlHandler(Some(on_ctrl), 1);
+            }
             service::run(config_path(1), ctx);
             Ok(())
         }

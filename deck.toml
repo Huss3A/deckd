@@ -3,18 +3,33 @@ brightness = 70
 pages = 1
 glyph_font = 'C:\Windows\Fonts\seguisym.ttf'
 
+[feedback]
+enabled = true
+width = 12
+radius = 18
+flash_ms = 350
+tap = "#2f81f7"
+double = "#3fb950"
+hold = "#f0883e"
+repeat = "#a371f7"
+
 [[button]]
 pos = "0,0"
-hold_long_ms = 1000
 label = "Notepad"
 color = "#1f6feb"
 glyph = "✎"
 
-[button.hold]
+[[button.holds]]
+ms = 500
+
+[button.holds.action]
 type = "print"
 text = "Held 0.5"
 
-[button.hold_long]
+[[button.holds]]
+ms = 1000
+
+[button.holds.action]
 type = "print"
 text = "Held long"
 
@@ -96,10 +111,37 @@ pos = "2,1"
 type = "print"
 text = "Double Tapped"
 
-[button.hold]
+[[button.holds]]
+ms = 500
+
+[button.holds.action]
 type = "print"
 text = "hELD"
 
 [button.action]
 type = "print"
 text = "hello 1"
+
+[[button]]
+pos = "3,0"
+label = "Audio"
+color = "#1f6feb"
+glyph = "🔊"
+state = "output_muted"
+
+[button.repeat]
+type = "media"
+key = "vol_up"
+
+[button.tap_hold]
+type = "media"
+key = "vol_down"
+
+[button.action]
+type = "media"
+key = "mute"
+
+[button.alt]
+label = "MUTED"
+color = "#b62324"
+glyph = "🔇"

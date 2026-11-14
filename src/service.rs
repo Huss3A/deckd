@@ -38,11 +38,29 @@ pub struct Ctx {
     pub notify: Arc<dyn Fn() + Send + Sync>,
     /// Also print log lines to the console.
     pub echo: bool,
+    /// Set to ask the service to finish what it is doing (never mid-transfer) and end.
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    /// Set by the service once it has stopped and released the deck.
+    stopped: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Ctx {
     pub fn new(echo: bool, notify: Arc<dyn Fn() + Send + Sync>) -> Ctx {
-        Ctx { status: Arc::new(Mutex::new(Status::default())), notify, echo }
+        Ctx { status: Arc::new(Mutex::new(Status::default())), notify, echo, stop: Arc::default(), stopped: Arc::default() }
+    }
+
+    fn stopping(&self) -> bool {
+        self.stop.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Ask the service to stop and wait (up to `wait`) until it has let go of the deck. Call this before the process exits:
+    /// killing the process in the middle of a transfer leaves the deck wedged until the USB cable is replugged.
+    pub fn shutdown(&self, wait: Duration) {
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        let end = Instant::now() + wait;
+        while !self.stopped.load(std::sync::atomic::Ordering::SeqCst) && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     fn with<R>(&self, f: impl FnOnce(&mut Status) -> R) -> R {
@@ -331,6 +349,10 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
         let mut glow_until: [Option<Instant>; 14] =[None; 14];
         let mut buf = [0u8; PACKET + 1];
         loop {
+            if ctx.stopping() {
+                ctx.log("stopping: released the deck");
+                return Ok(());
+            }
             if last_sample.elapsed() >= Duration::from_secs(1) {
                 last_sample = Instant::now();
                 sampler.sample();
@@ -612,11 +634,20 @@ pub fn run(path: PathBuf, ctx: Ctx) {
         }
     };
     ctx.log(format!("service started ({})", path.display()));
-    loop {
+    while !ctx.stopping() {
         if let Err(e) = session(&mut cfg, &path, &mut seen, &ctx) {
             ctx.log(e);
         }
+        if ctx.stopping() {
+            break;
+        }
         ctx.log("waiting for the deck (is Ulanzi Studio closed?)...");
-        std::thread::sleep(Duration::from_secs(2));
+        for _ in 0..40 {
+            if ctx.stopping() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
+    ctx.stopped.store(true, std::sync::atomic::Ordering::SeqCst);
 }
