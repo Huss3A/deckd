@@ -91,8 +91,6 @@ enum Glow {
     Double,
     Hold,
     Repeat,
-    /// First tap of a double-tap-capable button: a dim rim while the double window is open.
-    Armed,
 }
 
 /// Flash requests collected while handling a press; the session loop sends them to the deck.
@@ -329,29 +327,20 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                 if !fb.enabled || idx as usize >= 13 {
                     continue;
                 }
-                // an upload blocks the read loop for a while; if the button is already down again (second tap of a double),
-                // the late "up" event would be timed too long and look like a hold. Skip the dim rim in that case.
-                if g == Glow::Armed && keys[idx as usize].down.is_some() {
-                    continue;
-                }
+                let btn = cfg.button_for_index(page, idx);
                 let hex = match g {
-                    Glow::Tap => &fb.tap,
-                    Glow::Double => &fb.double,
+                    Glow::Tap => btn.and_then(|b| b.rim_tap.as_ref()).unwrap_or(&fb.tap),
+                    Glow::Double => btn.and_then(|b| b.rim_double.as_ref()).unwrap_or(&fb.double),
                     Glow::Hold => &fb.hold,
                     Glow::Repeat => &fb.repeat,
-                    Glow::Armed => &fb.double,
                 };
-                let mut rgb = crate::config::parse_hex(hex).unwrap_or([255, 255, 255]);
-                if g == Glow::Armed {
-                    rgb = [rgb[0] / 2, rgb[1] / 2, rgb[2] / 2]; // dim: "waiting for a second tap"
-                }
+                let rgb = crate::config::parse_hex(hex).unwrap_or([255, 255, 255]);
                 match send_cell(&dev, cfg, page, idx as usize, Some((rgb, fb.width as u32, fb.radius as u32))) {
                     Ok(()) => {
                         ctx.log(format!("rim: {g:?} on button {idx} (#{:02x}{:02x}{:02x})", rgb[0], rgb[1], rgb[2]));
                         // a repeat keeps its rim until release (the release handler ends it)
                         let hold_for = match g {
                             Glow::Repeat => Duration::from_secs(REPEAT_MAX_SECS + 1),
-                            Glow::Armed => Duration::from_millis(DOUBLE_MS + 50),
                             _ => Duration::from_millis(fb.flash_ms as u64),
                         };
                         glow_until[idx as usize] = Some(Instant::now() + hold_for);
@@ -422,7 +411,6 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                                     switch = fire(Fire::Double, index, page, cfg, ctx, &mut glow_q).or(switch);
                                 } else {
                                     keys[i].tap_at = Some(Instant::now());
-                                    glow_q.push((index, Glow::Armed)); // dim rim: waiting for a possible second tap
                                 }
                             } else {
                                 switch = fire(Fire::Single, index, page, cfg, ctx, &mut glow_q).or(switch);

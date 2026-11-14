@@ -92,6 +92,9 @@ fn check(cfg: &Config) -> Result<usize, CliError> {
     cfg.feedback.validate().map_err(invalid)?;
     for b in &cfg.buttons {
         b.cell().map_err(invalid)?;
+        if let Some(c) = b.rim_tap.iter().chain(b.rim_double.iter()).find(|c| crate::config::parse_hex(c).is_none()) {
+            return Err(usage(format!("rim color {c:?} must be #rrggbb")));
+        }
         if let Some(c) = b.holds.iter().filter_map(|h| h.color.as_ref()).find(|c| crate::config::parse_hex(c).is_none()) {
             return Err(invalid(format!("button {:?}: hold step color {c:?} must be #rrggbb", b.pos)));
         }
@@ -173,6 +176,9 @@ pub fn run(cmd: &str, raw: &[String]) -> Result<(), CliError> {
             if let Some(v) = a.get("icon") { b.icon = opt(v); }
             if let Some(v) = a.get("glyph") { b.glyph = opt(v); }
             if let Some(v) = a.get("glyph-color") { b.glyph_color = opt(v); }
+            // per-button rim colors for tap / double tap ("" resets to the global [feedback] color)
+            if let Some(v) = a.get("rim-tap") { b.rim_tap = opt(v); }
+            if let Some(v) = a.get("rim-double") { b.rim_double = opt(v); }
             if let Some(ms) = a.get("repeat-ms") {
                 b.repeat_ms = ms.parse().map_err(|_| usage("--repeat-ms must be a number 30-2000"))?;
             }
@@ -389,6 +395,8 @@ fn schema() -> Value {
                     "icon": {"type": "string", "description": "image path, scaled to 196x196"},
                     "glyph": {"type": "string", "description": "symbol drawn large in the middle"},
                     "glyph_color": color,
+                    "rim_tap": color,
+                    "rim_double": color,
                     "page": {"type": "integer", "minimum": 1, "maximum": 9, "default": 1},
                     "action": action,
                     "double": {"description": "extra action on a quick double tap", "allOf": [action]},

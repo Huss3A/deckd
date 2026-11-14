@@ -453,6 +453,30 @@ impl App {
             });
             ui.add_space(4.0);
 
+            // per-button rim colors (default: the global ones under "Button feedback")
+            let (def_tap, def_double) = (self.cfg.feedback.tap.clone(), self.cfg.feedback.double.clone());
+            ui.horizontal(|ui| {
+                ui.label("Rim:");
+                let mut c = b.rim_tap.as_deref().and_then(parse_rgb).or_else(|| parse_rgb(&def_tap)).unwrap_or([0x2f, 0x81, 0xf7]);
+                if egui::color_picker::color_edit_button_srgb(ui, &mut c).changed() {
+                    b.rim_tap = Some(hex(c));
+                }
+                ui.label("tap");
+                if b.rim_tap.is_some() && ui.small_button("reset").clicked() {
+                    b.rim_tap = None;
+                }
+                ui.add_space(12.0);
+                let mut c = b.rim_double.as_deref().and_then(parse_rgb).or_else(|| parse_rgb(&def_double)).unwrap_or([0x3f, 0xb9, 0x50]);
+                if egui::color_picker::color_edit_button_srgb(ui, &mut c).changed() {
+                    b.rim_double = Some(hex(c));
+                }
+                ui.label("double tap");
+                if b.rim_double.is_some() && ui.small_button("reset").clicked() {
+                    b.rim_double = None;
+                }
+            });
+            ui.add_space(4.0);
+
             ui.horizontal(|ui| {
                 let mut glyph = b.glyph.clone().unwrap_or_default();
                 ui.add(egui::TextEdit::singleline(&mut glyph).desired_width(70.0).hint_text("symbol"));

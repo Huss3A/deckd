@@ -211,6 +211,12 @@ pub struct Button {
     pub glyph_color: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action: Option<Action>,
+    /// Rim color for this button's tap (overrides `[feedback] tap`), "#rrggbb".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rim_tap: Option<String>,
+    /// Rim color for this button's double tap (overrides `[feedback] double`), "#rrggbb".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rim_double: Option<String>,
 }
 
 /// What happens when the button is pressed. Nothing runs unless a button defines an action.
@@ -269,6 +275,11 @@ impl Config {
                 crate::actions::validate(&h.action).map_err(|e| format!("button {:?} (page {}): {e}", b.pos, b.page))?;
                 if let Some(c) = &h.color {
                     parse_hex(c).ok_or_else(|| format!("button {:?}: hold step color {c:?} must be #rrggbb", b.pos))?;
+                }
+            }
+            for (n, c) in [("rim_tap", &b.rim_tap), ("rim_double", &b.rim_double)] {
+                if let Some(c) = c {
+                    parse_hex(c).ok_or_else(|| format!("button {:?}: {n} {c:?} must be #rrggbb", b.pos))?;
                 }
             }
             for a in [&b.action, &b.double, &b.repeat].into_iter().flatten() {
@@ -333,7 +344,7 @@ impl Default for Config {
 
 impl Default for Button {
     fn default() -> Self {
-        Button { page: 1, pos: String::new(), double: None, holds: Vec::new(), hold: None, hold_ms: DEFAULT_HOLD_MS, hold_long: None, hold_long_ms: DEFAULT_LONG_MS, repeat: None, repeat_ms: DEFAULT_REPEAT_MS, label: None, color: None, icon: None, glyph: None, glyph_color: None, action: None }
+        Button { page: 1, pos: String::new(), double: None, holds: Vec::new(), hold: None, hold_ms: DEFAULT_HOLD_MS, hold_long: None, hold_long_ms: DEFAULT_LONG_MS, repeat: None, repeat_ms: DEFAULT_REPEAT_MS, label: None, color: None, icon: None, glyph: None, glyph_color: None, action: None, rim_tap: None, rim_double: None }
     }
 }
 

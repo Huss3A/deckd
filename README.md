@@ -84,7 +84,9 @@ press. `print {text}` is an action that just writes to the log, for testing gest
 `radius` 0-60 px corner rounding, `flash_ms` 100-3000, colors `tap` / `double` / `hold` / `repeat`). A repeat keeps its rim while
 you hold. While holding a button that has hold steps, the rim appears at each step you reach and changes color per step
 (automatic hue shift, or a step's own `color`); releasing keeps the rim for `flash_ms` as the "fired" confirmation. After the
-first tap of a button with a double-tap action, a dim rim shows while the double-tap window is open ("armed"). It works by re-sending
+first tap of a button, nothing is shown while the double-tap window is open (an "armed" rim was tried and removed: it felt wrong).
+Each button can override the tap and double-tap rim colors (`rim_tap`, `rim_double`, `#rrggbb`; window: "Rim:" row; CLI:
+`set --rim-tap/--rim-double`, empty value resets). It works by re-sending
 that one button's picture with a border, then the normal picture. Also in the window under "Button feedback", and `deckd feedback`.
 Example volume-up button: `action = media vol_up` plus `repeat = media vol_up` (tap = one step, hold = continuous).
 
