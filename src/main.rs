@@ -29,7 +29,8 @@ use std::time::{Duration, Instant};
 
 /// Debug helper: print events, optionally with the heartbeat.
 fn monitor(dev: &HidDevice, secs: u64, keepalive: bool) {
-    let end = Instant::now() + Duration::from_secs(secs);
+    let start = Instant::now();
+    let end = start + Duration::from_secs(secs);
     let mut last_beat = Instant::now() - HEARTBEAT_EVERY;
     let mut buf = [0u8; PACKET + 1];
     println!("running for {secs}s (heartbeat {})...", if keepalive { "on" } else { "off" });
@@ -44,7 +45,12 @@ fn monitor(dev: &HidDevice, secs: u64, keepalive: bool) {
             Ok(0) => std::thread::sleep(Duration::from_millis(10)),
             Ok(n) => match protocol::parse(&buf[..n]) {
                 Some(Event::Button { index, state, pressed }) => {
-                    println!("button {index:2} state={state:#04x} {}", if pressed { "DOWN" } else { "up" })
+                    println!(
+                        "{:7} ms  button {index:2} state={state:#04x} {}  raw={:02x?}",
+                        start.elapsed().as_millis(),
+                        if pressed { "DOWN" } else { "up" },
+                        &buf[..16.min(n)]
+                    )
                 }
                 Some(Event::Other { cmd, payload }) => println!("cmd {cmd:#06x} payload={:02x?}", &payload[..payload.len().min(16)]),
                 None => {}

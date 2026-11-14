@@ -66,7 +66,15 @@ Status key: **[verified]** = tested on my unit (own client or captured from Ulan
 
 ## Incoming
 - `0x0101` button event **[verified]**: payload = `[state, index, 0x01, pressed]` (bytes 8..11); `pressed` is 1 down / 0 up.
-  - Buttons 0-12 send state `0x01`. Index 13 is the wide clock slot; it sent other state bytes (`c8 c9 ca cb 00`). **State byte not decoded.**
+  - Buttons 0-12 send state `0x01`. Index 13 is the wide clock slot and it behaves differently. **Decoded 2026-11-14** (timestamped
+    `deckd run` captures with beep-cued actions; owner confirmed it is ONE button, left/middle/right gave the same patterns):
+    - It is silent when untouched (25 s idle: no events), so the stream is not caused by our heartbeat.
+    - **Short tap = a burst** of quick DOWN/up pairs (~100 ms each, ~370 ms apart) whose state steps `c8, c9, ca` (longer bursts seen
+      with the full cycle `c8 c9 ca cb 00 02 64 01`, likely the firmware's own display-mode values; mapping unproven).
+    - **Long press (>~1 s) = one DOWN (`c8`) ... one up whose state is `01`**, duration matches the real press (hold 2 s -> 2.3 s).
+    - A slide (touch left, drag right) gave one DOWN `c8` ... up `c8` ~1 s later.
+    - Plan for using it as a button: treat a burst (gap < ~700 ms between events) as ONE tap, a DOWN with no up for > ~300 ms as a
+      hold (release = the up). Not implemented. Open: why the burst, whether the display changes on tap (owner to say).
   - **Mapping verified** (numbered test layout, `tools/make_map_test.ps1`): index = row*5 + col, i.e. `col_row` key `c_r` -> index `r*5 + c`.
     Top row = 0-4, middle row = 5-9, bottom row = 10-12 (cols 0-2), wide slot `3_2` (+ hidden `4_2`) = 13.
 - `0x0102` button event **[doc]**, `0x010B` firmware asks for the layout to be re-sent **[doc]**.
