@@ -82,6 +82,7 @@ enum Fire {
     Single,
     Double,
     Repeat,
+    TapHold,
 }
 
 /// Which gesture fired (picks the rim color).
@@ -111,6 +112,8 @@ struct Key {
     down: Option<Instant>,
     /// A first tap is waiting to see whether a second one follows.
     tap_at: Option<Instant>,
+    /// The current press began inside the window of a first tap (second press of a double tap / tap-then-hold).
+    armed: bool,
     /// The repeat action is running; `last_repeat` is when it last fired.
     repeating: bool,
     last_repeat: Option<Instant>,
@@ -263,11 +266,13 @@ fn fire(which: Fire, index: u8, page: u8, cfg: &Config, ctx: &Ctx, glow: &mut Gl
         Fire::Single => b.action.as_ref(),
         Fire::Double => b.double.as_ref(),
         Fire::Repeat => b.repeat.as_ref(),
+        Fire::TapHold => b.tap_hold.as_ref(),
     });
     let gesture = match which {
         Fire::Single => "tap",
         Fire::Double => "double tap",
         Fire::Repeat => "repeat",
+        Fire::TapHold => "tap-hold repeat",
     };
     match action {
         Some(a) => {
@@ -278,7 +283,7 @@ fn fire(which: Fire, index: u8, page: u8, cfg: &Config, ctx: &Ctx, glow: &mut Gl
             glow.push((index, match which {
                 Fire::Single => Glow::Tap,
                 Fire::Double => Glow::Double,
-                Fire::Repeat => Glow::Repeat,
+                Fire::Repeat | Fire::TapHold => Glow::Repeat,
             }));
             run_action(a, page, cfg, ctx)
         }
@@ -418,13 +423,17 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
             for i in 0..14usize {
                 let b = cfg.button_for_index(page, i as u8);
                 // repeat while held: starts after REPEAT_DELAY_MS, then every repeat_ms, until release (or the safety limit)
-                if let (Some(d), Some(rep)) = (keys[i].down, b.and_then(|b| b.repeat.as_ref())) {
+                // a press that began inside a first tap's window repeats `tap_hold` instead (the first tap never fires then)
+                let armed = keys[i].armed;
+                let rep_action = if armed { b.and_then(|b| b.tap_hold.as_ref()) } else { b.and_then(|b| b.repeat.as_ref()) };
+                if let (Some(d), Some(rep)) = (keys[i].down, rep_action) {
                     let every = Duration::from_millis(b.map_or(150, |b| b.repeat_ms) as u64);
                     if d.elapsed() >= Duration::from_secs(REPEAT_MAX_SECS) {
                         if keys[i].repeating {
                             ctx.log(format!("button {i}: repeat stopped (safety limit {REPEAT_MAX_SECS}s, release event never arrived)"));
                         }
                         keys[i].down = None;
+                        keys[i].armed = false;
                         keys[i].repeating = false;
                         keys[i].tier_shown = None;
                         glow_until[i] = Some(Instant::now()); // end the repeat's rim
@@ -432,7 +441,7 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                         keys[i].repeating = true;
                         keys[i].tap_at = None;
                         keys[i].last_repeat = Some(Instant::now());
-                        switch = fire(Fire::Repeat, i as u8, page, cfg, ctx, &mut glow_q).or(switch); // logs "repeat detected" once
+                        switch = fire(if armed { Fire::TapHold } else { Fire::Repeat }, i as u8, page, cfg, ctx, &mut glow_q).or(switch); // logs "repeat detected" once
                     } else if keys[i].repeating && keys[i].last_repeat.is_none_or(|t| t.elapsed() >= every) {
                         keys[i].last_repeat = Some(Instant::now());
                         let _ = run_action(rep, page, cfg, ctx); // quiet: no log line per repeat
@@ -457,7 +466,7 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                     }
                 }
                 if let Some(t) = keys[i].tap_at {
-                    if t.elapsed() >= Duration::from_millis(DOUBLE_MS) {
+                    if t.elapsed() >= Duration::from_millis(b.map_or(DOUBLE_MS, |b| b.window_ms as u64)) {
                         keys[i].tap_at = None;
                         switch = fire(Fire::Single, i as u8, page, cfg, ctx, &mut glow_q).or(switch);
                     }
@@ -516,6 +525,9 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                         let i = index as usize;
                         let b = cfg.button_for_index(page, index);
                         let (has_double, has_hold) = (b.is_some_and(|b| b.double.is_some()), b.is_some_and(|b| !b.holds.is_empty()));
+                        let has_tap_hold = b.is_some_and(|b| b.tap_hold.is_some());
+                        // a button with a hold gesture can't fire its tap on press (a hold would also tap): it fires on release
+                        let defers = has_double || has_hold || has_tap_hold || b.is_some_and(|b| b.repeat.is_some());
                         if pressed {
                             if last_press[i].elapsed() < DEBOUNCE {
                                 continue;
@@ -523,11 +535,13 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                             last_press[i] = Instant::now();
                             ctx.with(|s| s.pressed = Some((index, Instant::now())));
                             keys[i].down = Some(Instant::now());
-                            if !has_double && !has_hold {
+                            keys[i].armed = keys[i].tap_at.take().is_some();
+                            if !defers {
                                 switch = fire(Fire::Single, index, page, cfg, ctx, &mut glow_q).or(switch);
                             }
                         } else {
                             let held = keys[i].down.take().map(|d| d.elapsed());
+                            let was_armed = std::mem::take(&mut keys[i].armed);
                             if keys[i].repeating {
                                 // released after a repeat: that was a hold, not a tap
                                 keys[i].repeating = false;
@@ -537,7 +551,7 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                                 continue;
                             }
                             let Some(held) = held else { continue };
-                            if !has_double && !has_hold {
+                            if !defers {
                                 continue;
                             }
                             // holds fire on release: the steps sharing the longest duration that was reached run as a macro
@@ -554,10 +568,14 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                                 if progress {
                                     glow_q.retain(|(ix, g)| !(*ix == index && *g == Glow::Hold));
                                 }
-                            } else if has_double {
-                                if keys[i].tap_at.take().is_some() {
+                            } else if has_double || has_tap_hold {
+                                if !was_armed {
+                                    keys[i].tap_at = Some(Instant::now()); // first tap: wait for a second press
+                                } else if has_double {
                                     switch = fire(Fire::Double, index, page, cfg, ctx, &mut glow_q).or(switch);
                                 } else {
+                                    // second press was only a quick tap and there is no double tap: the first tap counts now
+                                    switch = fire(Fire::Single, index, page, cfg, ctx, &mut glow_q).or(switch);
                                     keys[i].tap_at = Some(Instant::now());
                                 }
                             } else {

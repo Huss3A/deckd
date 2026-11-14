@@ -96,8 +96,11 @@ the steps that share the longest `ms` that was reached run; steps with the same 
 and `split = true` on a step starts a separate macro that runs in parallel instead. Old `hold` / `hold_long` fields are
 migrated automatically) and `repeat` (runs again and again while held, e.g. volume; starts after 0.4 s, every `repeat_ms`,
 default 150, range 30-2000; stops on release, with a 20 s safety limit). With `double` set, the normal action waits for the
-window to expire; with only `hold`, a tap fires on release; with only `repeat`, the normal action still fires instantly on
-press. `print {text}` is an action that just writes to the log, for testing gestures.
+window to expire; with `hold` or `repeat`, a tap fires on release (so holding never also taps). `tap_hold` is a repeat for "tap, then press again
+and keep holding" (the first tap then does not fire; a quick second tap is still a double tap); it shares `repeat_ms`. `window_ms`
+(150-1000, default 350) is how long a tap waits for a second press. One-button audio: tap = `media mute` (with `state =
+"output_muted"` for the flip icon), `repeat = media vol_up`, `tap_hold = media vol_down`. CLI: `set --on tap_hold --window-ms N`.
+`print {text}` is an action that just writes to the log, for testing gestures.
 **Feedback:** when a gesture fires, the button flashes a colored rim on the deck (`[feedback]`: `enabled`, `width` 2-40 px,
 `radius` 0-60 px corner rounding, `flash_ms` 100-3000, colors `tap` / `double` / `hold` / `repeat`). A repeat keeps its rim while
 you hold. While holding a button that has hold steps, the rim appears at each step you reach and changes color per step

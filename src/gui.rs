@@ -119,7 +119,7 @@ impl App {
             .try_for_each(|b| {
                 b.cell()?;
                 b.check_face()?;
-                [&b.action, &b.double, &b.repeat]
+                [&b.action, &b.double, &b.repeat, &b.tap_hold]
                     .into_iter()
                     .flatten()
                     .chain(b.holds.iter().map(|h| &h.action))
@@ -738,6 +738,15 @@ impl App {
                 b.repeat = b.action.clone();
             }
         });
+        egui::CollapsingHeader::new("Tap, then hold (repeat)").default_open(b.tap_hold.is_some()).show(ui, |ui| {
+            ui.weak("Tap, then press again and keep holding: this repeats (e.g. volume down while Hold = volume up). The first tap does not fire in that case. Uses the same 'every' speed as 'While held'.");
+            self.action_editor(ui, "tap_hold", &mut b.tap_hold);
+            if b.tap_hold.is_some() || b.double.is_some() {
+                ui.add_space(4.0);
+                ui.add(egui::Slider::new(&mut b.window_ms, 150..=1000).suffix(" ms").text("second-press window"));
+                ui.weak("A tap waits this long for a second press before it fires. Shorter = snappier taps, but harder double taps.");
+            }
+        });
 
         ui.add_space(10.0);
         if ui.button("Clear this button").clicked() {
@@ -747,7 +756,7 @@ impl App {
         }
 
         if before != snapshot(&b) {
-            let empty = b.label.is_none() && b.color.is_none() && b.glyph.is_none() && b.icon.is_none() && b.face.is_image() && b.alt.is_none() && b.action.is_none() && b.double.is_none() && b.holds.is_empty() && b.repeat.is_none();
+            let empty = b.label.is_none() && b.color.is_none() && b.glyph.is_none() && b.icon.is_none() && b.face.is_image() && b.alt.is_none() && b.action.is_none() && b.double.is_none() && b.holds.is_empty() && b.repeat.is_none() && b.tap_hold.is_none();
             if empty {
                 self.cfg.clear_button(page, col, row);
             } else {

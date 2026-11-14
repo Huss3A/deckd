@@ -102,13 +102,16 @@ fn check(cfg: &Config) -> Result<usize, CliError> {
         if b.holds.iter().any(|h| !(100..=10000).contains(&h.ms)) {
             return Err(invalid(format!("button {:?}: hold step durations must be 100-10000 ms", b.pos)));
         }
-        for act in [&b.action, &b.double, &b.repeat].into_iter().flatten().chain(b.holds.iter().map(|h| &h.action)) {
+        for act in [&b.action, &b.double, &b.repeat, &b.tap_hold].into_iter().flatten().chain(b.holds.iter().map(|h| &h.action)) {
             actions::validate(act).map_err(|e| invalid(format!("button {:?} (page {}): {e}", b.pos, b.page)))?;
         }
     }
     for b in &cfg.buttons {
-        if matches!(b.repeat, Some(Action::Page { .. })) {
+        if matches!(b.repeat, Some(Action::Page { .. })) || matches!(b.tap_hold, Some(Action::Page { .. })) {
             return Err(invalid(format!("button {:?} (page {}): a page switch can't be used as a repeat action", b.pos, b.page)));
+        }
+        if !(150..=1000).contains(&b.window_ms) {
+            return Err(invalid(format!("button {:?}: window_ms must be 150-1000", b.pos)));
         }
         if !(30..=2000).contains(&b.repeat_ms) {
             return Err(invalid(format!("button {:?}: repeat_ms must be 30-2000", b.pos)));
@@ -228,6 +231,9 @@ pub fn run(cmd: &str, raw: &[String]) -> Result<(), CliError> {
             if let Some(ms) = a.get("repeat-ms") {
                 b.repeat_ms = ms.parse().map_err(|_| usage("--repeat-ms must be a number 30-2000"))?;
             }
+            if let Some(ms) = a.get("window-ms") {
+                b.window_ms = ms.parse().map_err(|_| usage("--window-ms must be a number 150-1000"))?;
+            }
             if a.has("clear-holds") {
                 b.holds.clear();
             }
@@ -250,6 +256,7 @@ pub fn run(cmd: &str, raw: &[String]) -> Result<(), CliError> {
                     "press" => b.action = new,
                     "double" => b.double = new,
                     "repeat" => b.repeat = new,
+                    "tap_hold" | "tap-hold" => b.tap_hold = new,
                     "hold" => {
                         let ms: u16 = a.get("hold-ms").unwrap_or("500").parse().map_err(|_| usage("--hold-ms must be a number 100-10000"))?;
                         match new {
@@ -257,7 +264,7 @@ pub fn run(cmd: &str, raw: &[String]) -> Result<(), CliError> {
                             Some(action) => b.holds.push(crate::config::HoldStep { ms, action, color: a.get("rim").map(str::to_string), split: a.has("split") }),
                         }
                     }
-                    other => return Err(usage(format!("unknown --on {other:?}; use press|double|hold|repeat"))),
+                    other => return Err(usage(format!("unknown --on {other:?}; use press|double|hold|repeat|tap_hold"))),
                 }
             }
             check(&cfg)?;
@@ -386,6 +393,7 @@ pub fn run(cmd: &str, raw: &[String]) -> Result<(), CliError> {
             let action = btn.and_then(|b| match a.get("on").unwrap_or("press") {
                 "double" => b.double.clone(),
                 "repeat" => b.repeat.clone(),
+                "tap_hold" | "tap-hold" => b.tap_hold.clone(),
                 _ => b.action.clone(),
             });
             match action {
@@ -463,6 +471,8 @@ fn schema() -> Value {
                             "color": {"type": "string", "pattern": "^#[0-9a-fA-F]{6}$", "description": "rim color shown while holding once ms is reached (default: automatic per tier)"},
                             "split": {"type": "boolean", "default": false}}}},
                     "repeat": {"description": "runs repeatedly while the button is held (after 0.4 s), e.g. volume; not a page action", "allOf": [action]},
+                    "tap_hold": {"description": "repeats while the button is held after a first tap (tap, then hold; e.g. volume down); the first tap does not fire then; uses repeat_ms; not a page action", "allOf": [action]},
+                    "window_ms": {"description": "how long a tap waits for a second press (double tap / tap_hold)", "type": "integer", "minimum": 150, "maximum": 1000, "default": 350},
                     "repeat_ms": {"type": "integer", "minimum": 30, "maximum": 2000, "default": 150}
                 }
             }}

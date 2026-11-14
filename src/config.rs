@@ -34,6 +34,13 @@ pub struct HoldStep {
     pub split: bool,
 }
 pub const DOUBLE_MS: u64 = 350;
+pub const DEFAULT_WINDOW_MS: u16 = 350;
+fn default_window_ms() -> u16 {
+    DEFAULT_WINDOW_MS
+}
+fn is_default_window(v: &u16) -> bool {
+    *v == DEFAULT_WINDOW_MS
+}
 /// Holding longer than this starts the `repeat` action; it then repeats every `repeat_ms`.
 pub const REPEAT_DELAY_MS: u64 = 400;
 /// Safety stop: a repeat never runs longer than this even if the deck's release event is lost.
@@ -195,6 +202,12 @@ pub struct Button {
     /// Milliseconds between repeats (30-2000).
     #[serde(default = "default_repeat_ms", skip_serializing_if = "is_default_repeat")]
     pub repeat_ms: u16,
+    /// Repeated while held after a tap ("tap, then hold"; e.g. volume down). Uses `repeat_ms`. The first tap does not fire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tap_hold: Option<Action>,
+    /// How long (ms, 150-1000) a tap waits for a second press (double tap / tap-then-hold). Default 350.
+    #[serde(default = "default_window_ms", skip_serializing_if = "is_default_window")]
+    pub window_ms: u16,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     /// Background color like "#1f6feb" (used when there is no icon).
@@ -381,11 +394,14 @@ impl Config {
                     parse_hex(c).ok_or_else(|| format!("button {:?}: {n} {c:?} must be #rrggbb", b.pos))?;
                 }
             }
-            for a in [&b.action, &b.double, &b.repeat].into_iter().flatten() {
+            for a in [&b.action, &b.double, &b.repeat, &b.tap_hold].into_iter().flatten() {
                 crate::actions::validate(a).map_err(|e| format!("button {:?} (page {}): {e}", b.pos, b.page))?;
             }
-            if matches!(b.repeat, Some(Action::Page { .. })) {
+            if matches!(b.repeat, Some(Action::Page { .. })) || matches!(b.tap_hold, Some(Action::Page { .. })) {
                 return Err(format!("button {:?} (page {}): a page switch can't be used as a repeat action", b.pos, b.page));
+            }
+            if !(150..=1000).contains(&b.window_ms) {
+                return Err(format!("button {:?}: window_ms must be 150-1000", b.pos));
             }
             if !(30..=2000).contains(&b.repeat_ms) {
                 return Err(format!("button {:?}: repeat_ms must be 30-2000", b.pos));
@@ -452,7 +468,7 @@ impl Default for Config {
 
 impl Default for Button {
     fn default() -> Self {
-        Button { page: 1, pos: String::new(), double: None, holds: Vec::new(), hold: None, hold_ms: DEFAULT_HOLD_MS, hold_long: None, hold_long_ms: DEFAULT_LONG_MS, repeat: None, repeat_ms: DEFAULT_REPEAT_MS, label: None, color: None, icon: None, glyph: None, glyph_color: None, action: None, state: None, alt: None, keep_clock: false, face: Face::Image, refresh_ms: DEFAULT_REFRESH_MS, clock_format: None, stats_style: None, rim_tap: None, rim_double: None }
+        Button { page: 1, pos: String::new(), double: None, holds: Vec::new(), hold: None, hold_ms: DEFAULT_HOLD_MS, hold_long: None, hold_long_ms: DEFAULT_LONG_MS, repeat: None, repeat_ms: DEFAULT_REPEAT_MS, tap_hold: None, window_ms: DEFAULT_WINDOW_MS, label: None, color: None, icon: None, glyph: None, glyph_color: None, action: None, state: None, alt: None, keep_clock: false, face: Face::Image, refresh_ms: DEFAULT_REFRESH_MS, clock_format: None, stats_style: None, rim_tap: None, rim_double: None }
     }
 }
 
