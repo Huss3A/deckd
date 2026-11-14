@@ -120,42 +120,15 @@ struct Key {
 
 /// The wide slot (button 13) does not report like the normal buttons (decoded 2026-11-14, see NOTES.md): a short tap arrives as a
 /// burst of quick down/up pairs with stepping state bytes (c8, c9, ca, ...), a long press as one down (c8) and one up with state 01.
-/// This turns that into plain press/release events: a burst (events less than WIDE_GAP apart) counts as one press, released at its
-/// first "up"; a long press is released by the up that carries state 01.
+/// The owner asked (2026-11-14) that nothing is dropped: every down/up from the wide slot is handled as a real press/release, whatever
+/// its state byte, and the owner judges whether detection is right. (A burst filter existed before; see git history.)
 #[derive(Default)]
-struct WideFilter {
-    last: Option<Instant>,
-    in_press: bool,
-}
-
-const WIDE_GAP: Duration = Duration::from_millis(700);
+struct WideFilter;
 
 impl WideFilter {
-    /// Normal buttons: only state 01 counts. Index 13: collapse bursts. Returns whether the event should be handled.
-    fn accept(&mut self, index: u8, state: u8, pressed: bool) -> bool {
-        if index != 13 {
-            return state == 0x01;
-        }
-        let gap_ok = self.last.is_none_or(|t| t.elapsed() >= WIDE_GAP);
-        self.last = Some(Instant::now());
-        // Measured 2026-11-14: a single, double and triple tap all produce the same two pairs (c8 then c9, sometimes c8 twice),
-        // so the deck does not report extra taps and a press inside a burst cannot be told from the burst's own echo.
-        // A press only starts after a quiet gap; double tap is not possible on the wide slot (use hold instead).
-        let ok = if pressed {
-            if gap_ok {
-                self.in_press = true;
-                true
-            } else {
-                false // later pair of the same burst
-            }
-        } else if self.in_press {
-            // the first "up" ends the press: a short tap ends here; a long press ends with state 01 after its real duration
-            self.in_press = false;
-            true
-        } else {
-            false
-        };
-        ok
+    /// Normal buttons: only state 01 counts. The wide slot (index 13): every event counts.
+    fn accept(&mut self, index: u8, state: u8, _pressed: bool) -> bool {
+        index == 13 || state == 0x01
     }
 }
 
