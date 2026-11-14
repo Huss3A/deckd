@@ -138,10 +138,11 @@ impl WideFilter {
         }
         let gap_ok = self.last.is_none_or(|t| t.elapsed() >= WIDE_GAP);
         self.last = Some(Instant::now());
-        // A new touch always starts with state c8 (the burst then steps c9, ca, ...), so c8 starts a press even inside the
-        // previous burst; that is what lets a quick second tap through. Other states only start one after a quiet gap.
+        // Measured 2026-11-14: a single, double and triple tap all produce the same two pairs (c8 then c9, sometimes c8 twice),
+        // so the deck does not report extra taps and a press inside a burst cannot be told from the burst's own echo.
+        // A press only starts after a quiet gap; double tap is not possible on the wide slot (use hold instead).
         let ok = if pressed {
-            if state == 0xc8 || gap_ok {
+            if gap_ok {
                 self.in_press = true;
                 true
             } else {

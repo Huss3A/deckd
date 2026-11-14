@@ -59,6 +59,10 @@ Status key: **[verified]** = tested on my unit (own client or captured from Ulan
 - Config pos `"3,2"` is the wide slot (`"4,2"` is rejected). With no button there, the layout keeps the firmware clock (`SmallViewMode` 1,
   heartbeat mode 1). With a button, the cell is `{"SmallViewMode":2, ..., "Icon": <458x196 png>}` and the heartbeat's first field is 2.
   Both come from community docs only; if the deck shows nothing / a broken slot, that is the first suspect.
+- **Double tap on the wide slot is impossible (measured 2026-11-14, 5 beep-cued taps):** single, double and triple taps all gave the
+  same two pairs (`c8` then `c9`, once `c8` twice, ~0.2 s apart). The deck does not report extra taps; counting burst pairs as presses
+  would turn every single tap into a double. Use tap and hold only. Other apps: racerxdl/ulanzi-d200-linux documents the slot as button
+  14 (index 13) usable as a normal button alongside its stats/GIF display, but says nothing about the state bytes or gestures.
 - Events: `service::WideFilter` collapses the firmware's tap bursts into one press/release (see the decode above). A double tap on the
   wide slot may not work: the burst lasts ~0.9 s and the filter ignores presses within 0.7 s of the last event. Test and adjust.
 
