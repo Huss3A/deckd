@@ -75,6 +75,12 @@ impl Ctx {
             println!("{msg}");
         }
         let line = format!("{} {msg}", chrono::Local::now().format("%H:%M:%S"));
+        if let Some(p) = LOG_FILE.get() {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) {
+                let _ = writeln!(f, "{line}");
+            }
+        }
         self.with(|s| {
             s.log.push_back(line);
             while s.log.len() > LOG_LINES {
@@ -82,6 +88,18 @@ impl Ctx {
             }
         });
     }
+}
+
+/// `deckd.log` next to the config: every log line is also appended here (so it can be read or copied after the fact).
+static LOG_FILE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+fn init_log_file(config: &Path) {
+    let p = config.parent().filter(|d| !d.as_os_str().is_empty()).map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(".")).join("deckd.log");
+    // start a fresh file when the old one has grown large
+    if std::fs::metadata(&p).is_ok_and(|m| m.len() > 512 * 1024) {
+        let _ = std::fs::remove_file(&p);
+    }
+    let _ = LOG_FILE.set(p);
 }
 
 fn modified(path: &Path) -> Option<SystemTime> {
@@ -232,8 +250,10 @@ fn run_action(action: &Action, page: u8, cfg: &Config, ctx: &Ctx) -> Option<u8> 
         // these take time (waits, typing): never block the loop that reads the deck
         let (action, ctx) = (action.clone(), ctx.clone());
         std::thread::spawn(move || {
-            if let Err(e) = actions::execute_logged(&action, &|m| ctx.log(m)) {
-                ctx.log(format!("macro failed: {e}"));
+            ctx.log("macro: running");
+            match actions::execute_logged(&action, &|m| ctx.log(m)) {
+                Ok(()) => ctx.log("macro: finished"),
+                Err(e) => ctx.log(format!("macro failed: {e}")),
             }
         });
         return None;
@@ -634,6 +654,7 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
 
 /// Never returns: keeps (re)connecting to the deck.
 pub fn run(path: PathBuf, ctx: Ctx) {
+    init_log_file(&path);
     let mut seen = modified(&path);
     let mut cfg = match Config::load(&path) {
         Ok(c) => c,

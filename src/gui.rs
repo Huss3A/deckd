@@ -1381,7 +1381,14 @@ impl eframe::App for App {
             } else if let Some(l) = last {
                 ui.weak(l);
             }
-            ui.toggle_value(&mut self.show_log, "Log");
+            ui.horizontal(|ui| {
+                ui.toggle_value(&mut self.show_log, "Log");
+                if ui.button("Copy log").on_hover_text("Copies the whole log to the clipboard").clicked() {
+                    let text = self.svc.status.lock().unwrap_or_else(|e| e.into_inner()).log.iter().cloned().collect::<Vec<_>>().join("\n");
+                    ui.ctx().copy_text(text);
+                    self.toast("Log copied");
+                }
+            });
             if self.show_log {
                 egui::ScrollArea::vertical().max_height(120.0).stick_to_bottom(true).show(ui, |ui| {
                     for l in self.svc.status.lock().unwrap_or_else(|e| e.into_inner()).log.iter() {

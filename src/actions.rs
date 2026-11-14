@@ -169,7 +169,10 @@ pub fn execute(action: &Action) -> Result<(), String> {
 pub fn execute_logged(action: &Action, log: &dyn Fn(String)) -> Result<(), String> {
     match action {
         Action::Delay { ms } => std::thread::sleep(std::time::Duration::from_millis(*ms as u64)),
-        Action::Text { text } => type_text(text),
+        Action::Text { text } => {
+            type_text(text);
+            log(format!("typed {} character(s)", text.chars().count()));
+        }
         Action::Macro { steps } => {
             for (n, s) in steps.iter().enumerate() {
                 if n > 0 && !matches!(s, Action::Delay { .. }) && !matches!(steps[n - 1], Action::Delay { .. }) {
