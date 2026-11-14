@@ -2,13 +2,17 @@
 //! Edits are saved to deck.toml (debounced); the service thread notices the file change and re-uploads.
 
 use crate::config::{Action, Alt, Button, Config, Face, StateSource, COLS, ROWS, SAMPLE};
-use crate::theme::{Styles, TabStyle};
+use crate::theme::Styles;
 use crate::{actions, layout, service};
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use crate::theme::Theme;
+use eframe::egui::RichText;
+
+mod studio;
 
 const UNDO_LIMIT: usize = 100;
 const SAVE_DELAY: Duration = Duration::from_millis(500);
@@ -37,6 +41,22 @@ enum Kind {
     Text,
     Delay,
     Macro,
+    Focus,
+}
+
+/// The step list of the macro in an action slot of a button ("press", "double", "repeat", "tap_hold", "hold<n>").
+fn slot_macro<'a>(b: &'a mut Button, slot: &str) -> Option<&'a mut Vec<Action>> {
+    let a: Option<&mut Action> = match slot {
+        "press" => b.action.as_mut(),
+        "double" => b.double.as_mut(),
+        "repeat" => b.repeat.as_mut(),
+        "tap_hold" => b.tap_hold.as_mut(),
+        s => s.strip_prefix("hold").and_then(|n| n.parse::<usize>().ok()).and_then(|n| b.holds.get_mut(n)).map(|h| &mut h.action),
+    };
+    match a {
+        Some(Action::Macro { steps }) => Some(steps),
+        _ => None,
+    }
 }
 
 fn kind_of(a: &Option<Action>) -> Kind {
@@ -51,6 +71,7 @@ fn kind_of(a: &Option<Action>) -> Kind {
         Some(Action::Open { .. }) => Kind::Open,
         Some(Action::Hotkey { .. }) => Kind::Hotkey,
         Some(Action::Media { .. }) => Kind::Media,
+        Some(Action::Focus { .. }) => Kind::Focus,
     }
 }
 
@@ -84,6 +105,18 @@ struct App {
     restoring: bool,
     clipboard: Option<Button>,
     show_settings: bool,
+    /// Tile size that fits the window (0 = use the style's size).
+    fit: f32,
+    lib_query: String,
+    lib_cat: String,
+    /// Library: pin the next action you add to all pages.
+    lib_pin: bool,
+    /// Whether the sign-in startup entry exists (read once at launch).
+    autostart: bool,
+    /// A macro's step list open in its own window: (page, key, action slot such as "press" or "hold0").
+    macro_pop: Option<(u8, (u8, u8), String)>,
+    /// True while that window is being drawn.
+    in_macro_window: bool,
     /// Live preview textures keyed by what they show.
     previews: HashMap<String, egui::TextureHandle>,
     bg_tex: Option<(PathBuf, egui::TextureHandle)>,
@@ -96,7 +129,11 @@ struct App {
 #[derive(PartialEq, Clone, Copy)]
 enum Tab {
     Look,
-    Actions,
+    Tap,
+    Double,
+    Hold,
+    Repeat,
+    TapHold,
     State,
 }
 
@@ -129,7 +166,11 @@ fn c32(c: [u8; 3]) -> Color32 {
 impl App {
     fn tg(&self) -> (f32, f32) {
         let t = &self.styles.theme;
-        (t.tile_size, t.tile_gap)
+        if self.fit > 0.0 {
+            (self.fit, (t.tile_gap * self.fit / t.tile_size).round().max(4.0))
+        } else {
+            (t.tile_size, t.tile_gap)
+        }
     }
 
     /// Put a copy of `b` on the clipboard (internal, and as TOML text for pasting elsewhere).
@@ -250,7 +291,33 @@ impl App {
         };
     }
 
+    /// Milliseconds on the window's animation clock (GIFs play from this).
+    fn anim_ms(ctx: &egui::Context) -> u64 {
+        (ctx.input(|i| i.time) * 1000.0) as u64
+    }
+
     fn texture(&mut self, ctx: &egui::Context, path: &str) -> Option<egui::TextureHandle> {
+        // animated GIF: pick the frame for now and schedule the next repaint for when it changes
+        if self.cfg.animate_gifs && layout::is_gif(path) {
+            let full = self.cfg.base_dir.join(path);
+            if let Some((idx, left)) = layout::gif_index_at(&full, Self::anim_ms(ctx)) {
+                ctx.request_repaint_after(Duration::from_millis(left.clamp(16, 1000)));
+                let key = format!("{path}#{idx}");
+                if !self.textures.contains_key(&key) {
+                    if self.textures.len() > 600 {
+                        self.textures.clear();
+                    }
+                    let tex = layout::gif_frame_image(&full, idx).map(|img| {
+                        let ci = egui::ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw());
+                        ctx.load_texture(key.clone(), ci, egui::TextureOptions::LINEAR)
+                    });
+                    self.textures.insert(key.clone(), tex);
+                }
+                if let Some(t) = self.textures.get(&key).cloned().flatten() {
+                    return Some(t);
+                }
+            }
+        }
         if !self.textures.contains_key(path) {
             let full = self.cfg.base_dir.join(path);
             let tex = image::open(&full).ok().map(|img| {
@@ -334,13 +401,19 @@ impl App {
         } else {
             1.0
         };
-        paint_tile(ui.painter(), rect, b.as_ref(), tex.as_ref(), alpha, th.tile_rounding, th.tile_empty);
+        paint_tile(ui.painter(), rect, b.as_ref(), tex.as_ref(), alpha, th.tile_rounding, th.tile_empty, self.cfg.round_icons);
+        if b.as_ref().is_some_and(|b| b.pinned) {
+            ui.painter().text(rect.right_top() + Vec2::new(-9.0, 10.0), Align2::CENTER_CENTER, "📌", FontId::proportional(12.0), Color32::WHITE);
+        }
         let caption = match b.as_ref().map(|b| b.face) {
             None if (col, row) == (3, 2) => Some("wide slot: firmware clock\n(click to set up a button)"),
             Some(Face::Clock) => Some("firmware clock"),
             Some(Face::Stats) => Some("firmware stats"),
             Some(Face::LiveClock) => Some("live clock"),
             Some(Face::LiveStats) => Some("live stats"),
+            Some(Face::LiveWeather) => Some("live weather"),
+            Some(Face::ClockWeather) => Some("clock + weather"),
+            Some(Face::Everything) => Some("time + date + weather"),
             _ => None,
         };
         if let Some(c) = caption {
@@ -362,6 +435,17 @@ impl App {
         };
         ui.painter().rect_stroke(rect, th.tile_rounding, stroke, StrokeKind::Inside);
 
+        // the same rim the deck is showing right now (tap / double / hold step / repeat)
+        let rim = self.svc.status.lock().ok().and_then(|s| (s.page == self.page).then(|| s.rims[(row * COLS + col) as usize]).flatten());
+        if let (Some(c), true) = (rim, self.cfg.feedback.enabled) {
+            let k = tile / 196.0;
+            let fb = &self.cfg.feedback;
+            let w = (fb.width as f32 * k).max(2.0);
+            // centered stroke so the rim's inner edge is rounded too (outer corner matches the tile)
+            let r = (th.tile_rounding - w / 2.0).max(w / 2.0);
+            ui.painter().rect_stroke(rect.shrink(w / 2.0), r, Stroke::new(w, Color32::from_rgb(c[0], c[1], c[2])), StrokeKind::Middle);
+        }
+
         // translucent ghost that follows the pointer while dragging
         if resp.dragged() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
@@ -369,7 +453,7 @@ impl App {
                 let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("drag_ghost"));
                 let painter = ui.ctx().layer_painter(layer);
                 let r = Rect::from_center_size(p, Vec2::new(tile_width(col, row, tile, gap), tile));
-                paint_tile(&painter, r, own.as_ref(), own_tex.as_ref(), 0.6, th.tile_rounding, th.tile_empty);
+                paint_tile(&painter, r, own.as_ref(), own_tex.as_ref(), 0.6, th.tile_rounding, th.tile_empty, self.cfg.round_icons);
                 painter.rect_stroke(r, th.tile_rounding,Stroke::new(2.0, Color32::from_rgba_unmultiplied(255, 255, 255, 150)), StrokeKind::Inside);
             }
         }
@@ -415,16 +499,18 @@ impl App {
         let bad = Color32::from_rgb(0xff, 0x7b, 0x72);
         let mut kind = kind_of(action);
         let old_kind = kind;
-        ui.horizontal_wrapped(|ui| {
-            let kinds: &[(Kind, &str)] = if step {
-                &[(Kind::Hotkey, "Hotkey"), (Kind::Text, "Type text"), (Kind::Delay, "Wait"), (Kind::Run, "Program"), (Kind::Open, "Open"), (Kind::Media, "Media"), (Kind::Print, "Print")]
-            } else {
-                &[(Kind::None, "Nothing"), (Kind::Run, "Program"), (Kind::Open, "Open"), (Kind::Hotkey, "Hotkey"), (Kind::Media, "Media"), (Kind::Text, "Type text"), (Kind::Macro, "Macro"), (Kind::Page, "Page"), (Kind::Print, "Print")]
-            };
-            for (k, name) in kinds {
-                ui.selectable_value(&mut kind, *k, *name);
-            }
-        });
+        if !step {
+            let kinds: &[(Kind, &str)] = &[(Kind::None, "Nothing"), (Kind::Run, "Program"), (Kind::Open, "Open"), (Kind::Hotkey, "Hotkey"), (Kind::Media, "Media"), (Kind::Text, "Type text"), (Kind::Focus, "Focus window"), (Kind::Macro, "Macro"), (Kind::Page, "Page"), (Kind::Print, "Print")];
+            let cur = kinds.iter().find(|(k, _)| *k == kind).map(|(_, n)| *n).unwrap_or("Nothing");
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Action").color(self.styles.theme.text_dim));
+                egui::ComboBox::from_id_salt(format!("kind_{slot}")).selected_text(cur).width(ui.available_width().max(120.0) - 8.0).show_ui(ui, |ui| {
+                    for (k, name) in kinds {
+                        ui.selectable_value(&mut kind, *k, *name);
+                    }
+                });
+            });
+        }
         if kind != old_kind {
             self.recording = None;
             self.test_msg = None;
@@ -439,6 +525,7 @@ impl App {
                 Kind::Print => Some(Action::Print { text: "hello".into() }),
                 Kind::Text => Some(Action::Text { text: String::new() }),
                 Kind::Delay => Some(Action::Delay { ms: 250 }),
+                Kind::Focus => Some(Action::Focus { window: String::new() }),
                 // the action that was there becomes step 1 of the new macro
                 Kind::Macro => Some(Action::Macro { steps: previous.filter(|p| !matches!(p, Action::Page { .. } | Action::Macro { .. })).into_iter().collect() }),
             };
@@ -530,6 +617,7 @@ impl App {
                         ("prev", "⏮ Prev"),
                         ("next", "⏭ Next"),
                         ("stop", "⏹ Stop"),
+                        ("mic_mute", "🎤 Mic mute"),
                     ] {
                         ui.selectable_value(key, k.to_string(), name);
                     }
@@ -563,66 +651,66 @@ impl App {
                     }
                 });
             }
+            Some(Action::Focus { window }) => {
+                ui.horizontal(|ui| {
+                    let w = room(ui, 150.0);
+                    ui.add(egui::TextEdit::singleline(window).desired_width(w).hint_text("part of the title, or the program (discord)"));
+                    ui.menu_button("Open windows ▾", |ui| {
+                        ui.set_max_width(320.0);
+                        let titles = actions::list_windows();
+                        if titles.is_empty() {
+                            ui.weak("No windows found");
+                        }
+                        egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+                            for (title, exe) in titles {
+                                let shown: String = title.chars().take(48).collect();
+                                if ui.button(format!("{shown}  ·  {exe}")).clicked() {
+                                    // the program name is steadier than a title that changes (documents, tabs)
+                                    *window = exe.trim_end_matches(".exe").to_string();
+                                    ui.close();
+                                }
+                            }
+                        });
+                    });
+                });
+                ui.weak("Brings the first matching window to the front, as if you had clicked it (restores it if minimized). Put a Wait after it before typing.");
+            }
             Some(Action::Text { text }) => {
                 let w = room(ui, 16.0);
                 ui.add(egui::TextEdit::multiline(text).desired_rows(3).desired_width(w).hint_text("text to type"));
                 ui.weak(format!("{} characters, typed into whichever window has focus. A line break presses Enter.", text.chars().count()));
             }
+            Some(Action::Macro { .. }) if !step && !self.in_macro_window && self.macro_pop.as_ref().is_some_and(|m| m.2 == slot && Some(m.1) == self.selected && m.0 == self.page) => {
+                ui.add_space(4.0);
+                ui.label("This macro is open in its own window.");
+                ui.add_space(4.0);
+                if ui.button("Bring it back here").clicked() {
+                    self.macro_pop = None;
+                }
+            }
             Some(Action::Macro { steps }) => {
-                ui.weak("Runs these steps one after the other. Add a Wait step to pause between two of them.");
-                let (mut remove, mut swap) = (None, None);
-                let count = steps.len();
-                for (n, s) in steps.iter_mut().enumerate() {
-                    egui::Frame::group(ui.style()).show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        ui.horizontal(|ui| {
-                            ui.strong(format!("Step {}", n + 1));
-                            if ui.add_enabled(n > 0, egui::Button::new("↑").small()).on_hover_text("Move up").clicked() {
-                                swap = Some((n, n - 1));
-                            }
-                            if ui.add_enabled(n + 1 < count, egui::Button::new("↓").small()).on_hover_text("Move down").clicked() {
-                                swap = Some((n, n + 1));
-                            }
-                            if ui.small_button("🗑").on_hover_text("Remove this step").clicked() {
-                                remove = Some(n);
-                            }
-                        });
-                        let mut act = Some(s.clone());
-                        self.action_editor_ex(ui, &format!("{slot}.s{n}"), &mut act, true);
-                        if let Some(a) = act {
-                            *s = a;
-                        }
-                    });
-                }
-                if let Some(n) = remove {
-                    steps.remove(n);
-                } else if let Some((a, b)) = swap {
-                    steps.swap(a, b);
-                }
-                ui.menu_button("+ Add step", |ui| {
-                    for (label, a) in [
-                        ("Hotkey", Action::Hotkey { keys: String::new() }),
-                        ("Type text", Action::Text { text: String::new() }),
-                        ("Wait", Action::Delay { ms: 250 }),
-                        ("Program", Action::Run { command: String::new(), args: vec![] }),
-                        ("Open", Action::Open { target: String::new() }),
-                        ("Media", Action::Media { key: "play_pause".into() }),
-                        ("Print", Action::Print { text: "step".into() }),
-                    ] {
-                        if ui.button(label).clicked() && steps.len() < crate::config::MACRO_MAX_STEPS {
-                            steps.push(a);
-                            ui.close();
+                let th = self.styles.theme.clone();
+                let slot_s = slot.to_string();
+                if !step && !self.in_macro_window {
+                    if let Some(cell) = self.selected {
+                        if ui.small_button("⧉ Pop out").on_hover_text("Open the steps in their own, bigger window").clicked() {
+                            self.macro_pop = Some((self.page, cell, slot.to_string()));
                         }
                     }
+                }
+                crate::macro_ui::rail(ui, &th, slot, steps, &mut |ui, n, a| {
+                    let mut act = Some(a.clone());
+                    self.action_editor_ex(ui, &format!("{slot_s}.s{n}"), &mut act, true);
+                    if let Some(x) = act {
+                        *a = x;
+                    }
                 });
-                let waits: u32 = steps.iter().map(|s| if let Action::Delay { ms } = s { *ms } else { 0 }).sum();
-                ui.weak(format!("{} step(s), {} ms of waiting plus a short gap between steps", steps.len(), waits));
             }
             None => {
                 ui.weak("Nothing happens.");
             }
         }
-        if let Some(a) = action.clone().filter(|_| !step) {
+        if let Some(a) = action.clone().filter(|a| !step && !matches!(a, Action::Macro { .. })) {
             ui.add_space(4.0);
             match actions::validate(&a) {
                 Err(e) => {
@@ -678,10 +766,11 @@ impl App {
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         let th = self.styles.theme.clone();
-        egui::Panel::top("top").show(ui, |ui| {
+        let bar = egui::Frame::new().fill(th.panel).inner_margin(egui::Margin::symmetric(16, 10));
+        egui::Panel::top("top").frame(bar).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("deckd").strong().size(th.heading_size).color(th.accent));
-                ui.add_space(6.0);
+                ui.add_space(14.0);
                 let count = self.cfg.page_count();
                 if self.page > count {
                     self.page = count;
@@ -727,6 +816,52 @@ impl App {
         });
     }
 
+    /// The steps of one macro in their own OS window, as big as you like (just the step list, nothing else).
+    fn macro_window(&mut self, ctx: &egui::Context) {
+        let Some((page, cell, slot)) = self.macro_pop.clone() else { return };
+        let th = self.styles.theme.clone();
+        let mut open = true;
+        let builder = egui::ViewportBuilder::default().with_title("deckd macro").with_inner_size([620.0, 860.0]).with_min_inner_size([420.0, 300.0]);
+        ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("deckd_macro"), builder, |ui, _class| {
+            if ui.ctx().input(|i| i.viewport().close_requested()) {
+                open = false;
+            }
+            egui::CentralPanel::default().frame(egui::Frame::new().fill(th.window).inner_margin(egui::Margin::same(16))).show(ui, |ui| {
+                let Some(mut b) = self.cfg.button_at(page, cell.0, cell.1).cloned() else {
+                    open = false;
+                    return;
+                };
+                let before = serde_json::to_string(&b).unwrap_or_default();
+                ui.label(egui::RichText::new(format!("Macro on button {},{} (page {page})", cell.0, cell.1)).strong().size(th.heading_size));
+                ui.add_space(6.0);
+                let slot_s = slot.clone();
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match slot_macro(&mut b, &slot) {
+                    Some(steps) => {
+                        self.in_macro_window = true;
+                        crate::macro_ui::rail(ui, &th, &slot, steps, &mut |ui, n, a| {
+                            let mut act = Some(a.clone());
+                            self.action_editor_ex(ui, &format!("{slot_s}.s{n}"), &mut act, true);
+                            if let Some(x) = act {
+                                *a = x;
+                            }
+                        });
+                        self.in_macro_window = false;
+                    }
+                    None => {
+                        open = false; // that action is no longer a macro
+                    }
+                });
+                if before != serde_json::to_string(&b).unwrap_or_default() {
+                    *self.cfg.button_mut(page, cell.0, cell.1) = b;
+                    self.changed();
+                }
+            });
+        });
+        if !open {
+            self.macro_pop = None;
+        }
+    }
+
     fn settings_window(&mut self, ctx: &egui::Context) {
         if !self.show_settings {
             return;
@@ -734,7 +869,15 @@ impl App {
         let mut open = true;
         let mut pick: Option<String> = None;
         let mut create = false;
-        egui::Window::new("Settings").open(&mut open).collapsible(false).default_width(440.0).show(ctx, |ui| {
+        // its own OS window, so it can be moved aside and never covers the deck
+        let builder = egui::ViewportBuilder::default().with_title("deckd settings").with_inner_size([520.0, 720.0]).with_min_inner_size([440.0, 420.0]);
+        let bg = self.styles.theme.window;
+        ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("deckd_settings"), builder, |ui, _class| {
+            if ui.ctx().input(|i| i.viewport().close_requested()) {
+                open = false;
+            }
+            egui::CentralPanel::default().frame(egui::Frame::new().fill(bg).inner_margin(egui::Margin::same(18))).show(ui, |ui| {
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.heading("Window style");
             ui.weak("A style recolors the window and can rearrange it. Drop a style file into the styles folder and pick it here.");
             let selected = self.styles.list.iter().find(|e| e.id == self.styles.selected).map(|e| e.name.clone()).unwrap_or_else(|| self.styles.selected.clone());
@@ -770,6 +913,39 @@ impl App {
             }
             ui.add_space(8.0);
             ui.separator();
+            ui.heading("Startup");
+            let mut auto = self.autostart;
+            if ui.checkbox(&mut auto, "Start deckd when I sign in to Windows").on_hover_text("Starts minimized, with the deck working right away. Only for your Windows account.").changed() {
+                if set_autostart(auto) {
+                    self.autostart = auto;
+                } else {
+                    self.toast("Could not change the startup entry");
+                }
+            }
+            ui.add_space(8.0);
+            ui.separator();
+            ui.heading("Weather");
+            ui.weak("For the wide key's Weather and Clock + weather looks. Only the city name is sent, to Open-Meteo (free, no account).");
+            ui.horizontal(|ui| {
+                ui.label("City");
+                if ui.add(egui::TextEdit::singleline(&mut self.cfg.weather_city).desired_width(200.0).hint_text("e.g. London")).changed() {
+                    self.changed();
+                }
+                if ui.checkbox(&mut self.cfg.weather_fahrenheit, "°F").changed() {
+                    self.changed();
+                }
+            });
+            ui.add_space(8.0);
+            ui.separator();
+            ui.heading("Animation");
+            if ui.checkbox(&mut self.cfg.animate_gifs, "Play GIFs in this window").on_hover_text("Off shows the first frame only. The deck itself always plays them.").changed() {
+                self.changed();
+            }
+            if ui.checkbox(&mut self.cfg.round_icons, "Round the corners of button pictures in this window").on_hover_text("Only changes how the window draws them; the deck's own screen stays as it is.").changed() {
+                self.changed();
+            }
+            ui.add_space(8.0);
+            ui.separator();
             ui.heading("Button feedback");
             ui.weak("A colored rim flashed on the deck button when a gesture fires.");
             let before = self.cfg.feedback.clone();
@@ -793,6 +969,8 @@ impl App {
             if before != self.cfg.feedback {
                 self.changed();
             }
+            });
+            });
         });
         if let Some(id) = pick {
             self.styles.select(&id);
@@ -829,6 +1007,9 @@ impl App {
         }
         if redo {
             self.do_redo();
+        }
+        if crate::macro_ui::rail_active(ctx) {
+            return; // the macro step list owns arrows, Delete and Ctrl+D while it has focus
         }
         if let Some(cell) = self.selected {
             if copy {
@@ -892,9 +1073,17 @@ impl App {
     /// The tile as the deck will show it, rendered by the same code that builds the deck's pictures.
     fn preview_tile(&mut self, ui: &mut egui::Ui, b: &Button, wide: bool, alt: bool, width: f32) {
         let height = if wide { width * 196.0 / 458.0 } else { width };
-        let live = layout::Live::snapshot();
-        let animated = b.face.is_live() || b.icon.as_deref().is_some_and(layout::is_gif);
-        let key = format!("{}|{wide}|{alt}|{}", serde_json::to_string(b).unwrap_or_default(), if animated { live.now.timestamp() } else { 0 });
+        let mut live = layout::Live::snapshot();
+        let gif = b.icon.as_deref().filter(|p| layout::is_gif(p) && !b.face.is_live());
+        let mut stamp = if b.face.is_live() { live.now.timestamp() } else { 0 };
+        if let (Some(p), true) = (gif, self.cfg.animate_gifs) {
+            live.tick_ms = Self::anim_ms(ui.ctx());
+            if let Some((idx, left)) = layout::gif_index_at(&self.cfg.base_dir.join(p), live.tick_ms) {
+                stamp = idx as i64 + 1;
+                ui.ctx().request_repaint_after(Duration::from_millis(left.clamp(16, 1000)));
+            }
+        }
+        let key = format!("{}|{wide}|{alt}|{stamp}", serde_json::to_string(b).unwrap_or_default());
         if !self.previews.contains_key(&key) {
             if self.previews.len() > 32 {
                 self.previews.clear();
@@ -913,7 +1102,7 @@ impl App {
         let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
         match self.previews.get(&key) {
             Some(t) => {
-                ui.painter().image(t.id(), rect, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+                rounded_image(ui.painter(), t.id(), rect, if self.cfg.round_icons { th.tile_rounding } else { 0.0 }, Color32::WHITE);
             }
             None => {
                 ui.painter().rect_filled(rect, th.tile_rounding, th.tile_empty);
@@ -924,31 +1113,27 @@ impl App {
         ui.painter().rect_stroke(rect, th.tile_rounding, Stroke::new(1.0, th.tile_border), StrokeKind::Inside);
     }
 
-    /// Look / Actions / State, drawn in the style's tab look.
-    fn tab_bar(&mut self, ui: &mut egui::Ui) {
+    /// A soft surface for a group of controls.
+    fn card(&self) -> egui::Frame {
+        let th = &self.styles.theme;
+        egui::Frame::new()
+            .fill(th.card.gamma_multiply(0.45))
+            .stroke(Stroke::new(th.border_width, th.border))
+            .corner_radius(egui::CornerRadius::same(th.card_rounding))
+            .inner_margin(egui::Margin::same(12))
+    }
+
+    /// One strip of sections: Look, one per gesture, State. A dot marks the ones that are set up.
+    fn tab_strip(&mut self, ui: &mut egui::Ui, on: [bool; 7]) {
         let th = self.styles.theme.clone();
-        ui.horizontal(|ui| {
-            for (t, name) in [(Tab::Look, "Look"), (Tab::Actions, "Actions"), (Tab::State, "State")] {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            for (i, (t, name)) in [(Tab::Look, "Look"), (Tab::Tap, "Tap"), (Tab::Double, "Double tap"), (Tab::Hold, "Hold"), (Tab::Repeat, "While held"), (Tab::TapHold, "Tap, then hold"), (Tab::State, "State")].into_iter().enumerate() {
                 let sel = self.tab == t;
-                let clicked = match th.tabs {
-                    TabStyle::Pills => {
-                        let text = egui::RichText::new(name).color(if sel { th.accent_text } else { th.text });
-                        let btn = egui::Button::new(text).fill(if sel { th.accent } else { Color32::TRANSPARENT }).stroke(Stroke::NONE).corner_radius(egui::CornerRadius::same(255));
-                        ui.add(btn).clicked()
-                    }
-                    TabStyle::Underline => {
-                        let text = egui::RichText::new(name).color(if sel { th.text } else { th.text_dim }).strong();
-                        let r = ui.add(egui::Label::new(text).sense(Sense::click()));
-                        if sel {
-                            let y = r.rect.bottom() + 2.0;
-                            ui.painter().line_segment([Pos2::new(r.rect.left(), y), Pos2::new(r.rect.right(), y)], Stroke::new(2.0, th.accent));
-                        }
-                        ui.add_space(8.0);
-                        r.clicked()
-                    }
-                    TabStyle::Boxed => ui.selectable_label(sel, name).clicked(),
-                };
-                if clicked {
+                let label = if on[i] { format!("{name}  •") } else { name.to_string() };
+                let text = egui::RichText::new(label).strong().color(if sel { th.accent_text } else if on[i] { th.text } else { th.text_dim });
+                let btn = egui::Button::new(text).fill(if sel { th.accent } else { Color32::TRANSPARENT }).stroke(Stroke::NONE).corner_radius(egui::CornerRadius::same(255)).min_size(Vec2::new(0.0, 28.0));
+                if ui.add(btn).clicked() {
                     self.tab = t;
                 }
             }
@@ -970,32 +1155,47 @@ impl App {
 
         // header: the real tile (rendered by the same code that feeds the deck) and what to do with it
         let mut header_cmd: Option<TileCmd> = None;
-        ui.horizontal(|ui| {
-            let w = if wide_slot { 190.0 } else { 96.0 };
-            self.preview_tile(ui, &b, wide_slot, false, w);
-            ui.vertical(|ui| {
-                ui.heading(if wide_slot { "Wide button".to_string() } else { format!("Button {col},{row}") });
-                ui.weak(format!("page {page} · #{}", row * COLS + col));
-                ui.horizontal(|ui| {
-                    if ui.small_button("Copy").on_hover_text("Ctrl+C").clicked() {
-                        header_cmd = Some(TileCmd::Copy((col, row)));
-                    }
-                    if ui.add_enabled(self.clipboard.is_some(), egui::Button::new("Paste").small()).on_hover_text("Ctrl+V").clicked() {
-                        header_cmd = Some(TileCmd::Paste((col, row)));
-                    }
-                    if ui.small_button("Clear").on_hover_text("Delete").clicked() {
-                        header_cmd = Some(TileCmd::Clear((col, row)));
-                    }
+        let mut detach = false;
+        let on = [false, b.action.is_some(), b.double.is_some(), !b.holds.is_empty(), b.repeat.is_some(), b.tap_hold.is_some(), b.alt.is_some()];
+        let th = self.styles.theme.clone();
+        ui.vertical(|ui| {
+            // the button itself and what to do with it
+            ui.horizontal(|ui| {
+                let w = if wide_slot { 118.0 } else { 84.0 };
+                self.preview_tile(ui, &b, wide_slot, false, w);
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new(if wide_slot { "Wide button".to_string() } else { format!("Button {col},{row}") }).strong().size(th.heading_size));
+                    ui.label(egui::RichText::new(format!("page {page} · #{}", row * COLS + col)).size(th.small_size).color(th.text_dim));
+                    ui.add_space(2.0);
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.small_button("Copy").on_hover_text("Ctrl+C").clicked() {
+                            header_cmd = Some(TileCmd::Copy((col, row)));
+                        }
+                        if ui.add_enabled(self.clipboard.is_some(), egui::Button::new("Paste").small()).on_hover_text("Ctrl+V").clicked() {
+                            header_cmd = Some(TileCmd::Paste((col, row)));
+                        }
+                        if ui.small_button("Clear").on_hover_text("Delete").clicked() {
+                            header_cmd = Some(TileCmd::Clear((col, row)));
+                        }
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        ui.checkbox(&mut b.pinned, "📌 Pin to all pages").on_hover_text("Shows this key at the same spot on every page. A page's own key there still wins.");
+                        if b.pinned && b.page != page {
+                            ui.label(egui::RichText::new(format!("(from page {})", b.page)).size(th.small_size).color(th.text_dim));
+                            if ui.small_button("Different here").on_hover_text("Give this page its own key instead of the pinned one").clicked() {
+                                detach = true;
+                            }
+                        }
+                    });
                 });
             });
-        });
-        if let Some(c) = header_cmd {
-            self.run_cmd(ui.ctx(), c);
-            return;
-        }
-        ui.add_space(6.0);
-        self.tab_bar(ui);
-        ui.add_space(4.0);
+            ui.add_space(8.0);
+            // one section at a time
+            ui.vertical(|ui| {
+                self.tab_strip(ui, on);
+                ui.add_space(6.0);
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                ui.set_max_width(ui.available_width().min(820.0));
 
         // what the button shows: its picture, a live clock / stats drawn by deckd, or (wide slot only) the firmware's own display
         if tab == Tab::Look {
@@ -1004,13 +1204,16 @@ impl App {
                 Face::Image => "Picture / symbol / GIF",
                 Face::LiveClock => "Live clock (drawn by deckd)",
                 Face::LiveStats => "Live CPU / RAM stats (drawn by deckd)",
+                Face::LiveWeather => "Weather (drawn by deckd)",
+                Face::ClockWeather => "Clock + weather, alternating",
+                Face::Everything => "Time + date + weather, all in one",
                 Face::Clock => "Firmware clock",
                 Face::Stats => "Firmware stats",
             };
             ui.horizontal(|ui| {
                 ui.label("Shows:");
                 egui::ComboBox::from_id_salt("face").selected_text(name(b.face)).width(240.0).show_ui(ui, |ui| {
-                    for f in [Face::Image, Face::LiveClock, Face::LiveStats, Face::Clock, Face::Stats] {
+                    for f in [Face::Image, Face::LiveClock, Face::Everything, Face::ClockWeather, Face::LiveWeather, Face::LiveStats, Face::Clock, Face::Stats] {
                         if f.is_firmware() && !wide {
                             continue;
                         }
@@ -1030,8 +1233,15 @@ impl App {
                     }
                 });
             }
-            if b.face == Face::LiveClock {
-                ui.horizontal(|ui| {
+            if matches!(b.face, Face::LiveWeather | Face::ClockWeather | Face::Everything) {
+                if self.cfg.weather_city.trim().is_empty() {
+                    ui.colored_label(th.warn, "Set your city in Settings (the gear, top right) so the weather knows where to look.");
+                } else {
+                    ui.weak(format!("Weather for {} (change it in Settings).", self.cfg.weather_city));
+                }
+            }
+            if matches!(b.face, Face::LiveClock | Face::ClockWeather | Face::Everything) {
+                ui.horizontal_wrapped(|ui| {
                     let mut f = b.clock_format.clone().unwrap_or_default();
                     ui.add(egui::TextEdit::singleline(&mut f).desired_width(120.0).hint_text("%H:%M"));
                     b.clock_format = (!f.is_empty()).then_some(f);
@@ -1044,7 +1254,7 @@ impl App {
                 ui.weak("Format codes: %H hour, %M minute, %S second, %a weekday, %d day, %b month. Colors: background / symbol below.");
             }
             if b.face == Face::LiveStats {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label("Style");
                     let mut s = b.stats_style.clone().unwrap_or_else(|| "bars".into());
                     for st in ["bars", "line", "text"] {
@@ -1058,7 +1268,7 @@ impl App {
 
         // ---- look ----
         if tab == Tab::Look {
-        egui::Frame::group(ui.style()).show(ui, |ui| {
+        self.card().show(ui, |ui| {
             ui.set_width(ui.available_width());
             let mut label = b.label.clone().unwrap_or_default();
             let w = (ui.available_width() - 16.0).max(60.0);
@@ -1208,29 +1418,28 @@ impl App {
         }
 
         // ---- actions ----
-        if tab == Tab::Actions {
-        ui.label(egui::RichText::new("WHEN PRESSED").small().weak());
-        egui::Frame::group(ui.style()).show(ui, |ui| {
+        {
+        if tab == Tab::Tap {
+        self.card().show(ui, |ui| {
             ui.set_width(ui.available_width());
             self.action_editor(ui, "press", &mut b.action);
             ui.add_space(4.0);
             self.rim_row(ui, "Tap rim", &mut b.rim_tap, self.cfg.feedback.tap.clone(), [0x2f, 0x81, 0xf7]);
         });
+        }
 
-        ui.add_space(6.0);
-        egui::CollapsingHeader::new("On double tap").default_open(b.double.is_some()).show(ui, |ui| {
+        if tab == Tab::Double { ui.vertical(|ui| {
             ui.weak("Runs instead of the normal action when you tap twice quickly. The normal action then waits ~0.35 s.");
             self.action_editor(ui, "double", &mut b.double);
             ui.add_space(4.0);
             self.rim_row(ui, "Double-tap rim", &mut b.rim_double, self.cfg.feedback.double.clone(), [0x3f, 0xb9, 0x50]);
-        });
-        let title = if b.holds.is_empty() { "On hold (fires on release)".to_string() } else { format!("On hold ({} step{})", b.holds.len(), if b.holds.len() == 1 { "" } else { "s" }) };
-        egui::CollapsingHeader::new(title).default_open(!b.holds.is_empty()).show(ui, |ui| {
+        }); }
+        if tab == Tab::Hold { ui.vertical(|ui| {
             ui.weak("Fires when you let go. Add as many steps as you like, each with its own duration; the steps with the longest duration you reached run. Steps sharing a duration are chained into one macro (in order).");
             let counts: Vec<usize> = b.holds.iter().map(|h| b.holds.iter().filter(|o| o.ms == h.ms).count()).collect();
             let (mut remove, mut chain) = (None, None);
             for (n, h) in b.holds.iter_mut().enumerate() {
-                egui::Frame::group(ui.style()).show(ui, |ui| {
+                self.card().show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
                         ui.add(egui::Slider::new(&mut h.ms, 100..=10000).logarithmic(true).suffix(" ms").text("held at least"));
@@ -1275,8 +1484,8 @@ impl App {
                 b.holds.push(crate::config::HoldStep { ms, action: Action::Print { text: "hold step".into() }, color: None, split: false });
             }
             ui.weak("Drag a slider, or click its number and type an exact value.");
-        });
-        egui::CollapsingHeader::new("While held (repeat)").default_open(b.repeat.is_some()).show(ui, |ui| {
+        }); }
+        if tab == Tab::Repeat { ui.vertical(|ui| {
             ui.weak("Keeps running while you hold the button, until you let go. Great for volume up/down. A quick tap still runs the normal action once.");
             self.action_editor(ui, "repeat", &mut b.repeat);
             if b.repeat.is_some() {
@@ -1288,8 +1497,8 @@ impl App {
             if b.repeat.is_none() && b.action.as_ref().is_some_and(|a| !matches!(a, Action::Page { .. })) && ui.button("Repeat the normal action while held").clicked() {
                 b.repeat = b.action.clone();
             }
-        });
-        egui::CollapsingHeader::new("Tap, then hold (repeat)").default_open(b.tap_hold.is_some()).show(ui, |ui| {
+        }); }
+        if tab == Tab::TapHold { ui.vertical(|ui| {
             ui.weak("Tap, then press again and keep holding: this repeats (e.g. volume down while Hold = volume up). The first tap does not fire in that case. Uses the same 'every' speed as 'While held'.");
             self.action_editor(ui, "tap_hold", &mut b.tap_hold);
             if b.tap_hold.is_some() || b.double.is_some() {
@@ -1297,7 +1506,23 @@ impl App {
                 ui.add(egui::Slider::new(&mut b.window_ms, 150..=1000).suffix(" ms").text("second-press window"));
                 ui.weak("A tap waits this long for a second press before it fires. Shorter = snappier taps, but harder double taps.");
             }
+        }); }
+        }
+                });
+            });
         });
+        if let Some(c) = header_cmd {
+            self.run_cmd(ui.ctx(), c);
+            return;
+        }
+        if detach {
+            // this page gets its own copy (not pinned); the pinned key stays on the other pages
+            let mut own = b.clone();
+            own.page = page;
+            own.pinned = false;
+            self.cfg.buttons.push(own);
+            self.changed();
+            return;
         }
 
         if before != snapshot(&b) {
@@ -1328,18 +1553,56 @@ fn key_name(k: egui::Key) -> String {
     }
 }
 
-fn paint_tile(p: &egui::Painter, rect: Rect, b: Option<&Button>, tex: Option<&egui::TextureHandle>, a: f32, rounding: f32, empty: Color32) {
+/// Draw a texture clipped to a rounded rectangle (a triangle fan with the texture mapped over it).
+fn rounded_image(p: &egui::Painter, tex: egui::TextureId, rect: Rect, radius: f32, tint: Color32) {
+    if radius <= 0.5 {
+        p.image(tex, rect, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), tint);
+        return;
+    }
+    let r = radius.min(rect.width() / 2.0).min(rect.height() / 2.0);
+    let mut pts: Vec<Pos2> = Vec::new();
+    let corners = [
+        (Pos2::new(rect.max.x - r, rect.min.y + r), -std::f32::consts::FRAC_PI_2),
+        (Pos2::new(rect.max.x - r, rect.max.y - r), 0.0),
+        (Pos2::new(rect.min.x + r, rect.max.y - r), std::f32::consts::FRAC_PI_2),
+        (Pos2::new(rect.min.x + r, rect.min.y + r), std::f32::consts::PI),
+    ];
+    for (c, start) in corners {
+        for i in 0..=8 {
+            let a = start + std::f32::consts::FRAC_PI_2 * i as f32 / 8.0;
+            pts.push(c + Vec2::new(a.cos(), a.sin()) * r);
+        }
+    }
+    let uv = |q: Pos2| Pos2::new((q.x - rect.min.x) / rect.width(), (q.y - rect.min.y) / rect.height());
+    let mut mesh = egui::Mesh::with_texture(tex);
+    mesh.vertices.push(egui::epaint::Vertex { pos: rect.center(), uv: uv(rect.center()), color: tint });
+    for q in &pts {
+        mesh.vertices.push(egui::epaint::Vertex { pos: *q, uv: uv(*q), color: tint });
+    }
+    let n = pts.len() as u32;
+    for i in 0..n {
+        mesh.indices.extend_from_slice(&[0, 1 + i, 1 + (i + 1) % n]);
+    }
+    p.add(egui::Shape::mesh(mesh));
+}
+
+fn paint_tile(p: &egui::Painter, rect: Rect, b: Option<&Button>, tex: Option<&egui::TextureHandle>, a: f32, rounding: f32, empty: Color32, round_img: bool) {
     let bg = b.and_then(|b| b.color.as_deref()).and_then(parse_rgb).map(c32).unwrap_or(empty);
     p.rect_filled(rect, rounding, bg.gamma_multiply(a));
     if let Some(t) = tex {
-        p.image(t.id(), rect, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE.gamma_multiply(a));
+        rounded_image(p, t.id(), rect, if round_img { rounding } else { 0.0 }, Color32::WHITE.gamma_multiply(a));
     }
     if let Some(g) = b.and_then(|b| b.glyph.as_deref()) {
         let gc = b.and_then(|b| b.glyph_color.as_deref()).and_then(parse_rgb).unwrap_or([255, 255, 255]);
         p.text(rect.center() - Vec2::new(0.0, 8.0), Align2::CENTER_CENTER, g, FontId::proportional(44.0), Color32::from_rgb(gc[0], gc[1], gc[2]).gamma_multiply(a));
     }
     if let Some(l) = b.and_then(|b| b.label.as_deref()).filter(|l| !l.is_empty()) {
-        p.text(rect.center_bottom() - Vec2::new(0.0, 6.0), Align2::CENTER_BOTTOM, l, FontId::proportional(12.0), Color32::WHITE.gamma_multiply(a));
+        // black outline so white text stays readable on light tile colors
+        let at = rect.center_bottom() - Vec2::new(0.0, 6.0);
+        for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+            p.text(at + Vec2::new(dx, dy), Align2::CENTER_BOTTOM, l, FontId::proportional(12.0), Color32::BLACK.gamma_multiply(a));
+        }
+        p.text(at, Align2::CENTER_BOTTOM, l, FontId::proportional(12.0), Color32::WHITE.gamma_multiply(a));
     }
 }
 
@@ -1347,122 +1610,41 @@ impl eframe::App for App {
     /// Closing the window must not cut a transfer to the deck in half (that wedges it until the cable is replugged).
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.svc.shutdown(std::time::Duration::from_secs(4));
+        crate::tray::remove();
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        use std::sync::atomic::Ordering::Relaxed;
+        let tray_ok = crate::tray::AVAILABLE.load(Relaxed);
+        if START_MINIMIZED.swap(false, Relaxed) {
+            // started by "start with Windows": go straight to the tray (or the taskbar if there is no tray icon)
+            ctx.send_viewport_cmd(if tray_ok { egui::ViewportCommand::Visible(false) } else { egui::ViewportCommand::Minimized(true) });
+        }
+        if crate::tray::SHOW_REQUEST.swap(false, Relaxed) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
+        if tray_ok && !crate::tray::QUITTING.load(Relaxed) && ctx.input(|i| i.viewport().close_requested()) {
+            // the X button hides to the tray; Quit in the tray menu really exits
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            self.try_save();
+        }
         self.styles.poll();
         if std::mem::take(&mut self.styles.changed) {
             self.apply_style(&ctx);
         }
-        let th = self.styles.theme.clone();
-
-        self.top_bar(ui);
-
-        egui::Panel::bottom("status").show(ui, |ui| {
-            let (connected, info, config_error, last) = {
-                let s = self.svc.status.lock().unwrap_or_else(|e| e.into_inner());
-                (s.connected, s.info.clone(), s.config_error.clone(), s.log.back().cloned())
-            };
-            ui.horizontal(|ui| {
-                if connected {
-                    ui.colored_label(th.ok, "● Deck connected");
-                    ui.weak(info.replace('{', "").replace('}', "").replace('"', ""));
-                } else {
-                    ui.colored_label(th.warn, "○ Waiting for the deck (is Ulanzi Studio closed?)");
-                }
-            });
-            if let Some(e) = self.save_error.as_ref().or(config_error.as_ref()) {
-                ui.colored_label(th.error, format!("Not saved / not applied: {e}"));
-            } else if self.dirty_since.is_some() {
-                ui.weak("Saving…");
-            } else if self.saved_at.is_some_and(|t| t.elapsed() < Duration::from_secs(4)) {
-                ui.colored_label(th.ok, "✔ Saved, sending to the deck");
-            } else if let Some(l) = last {
-                ui.weak(l);
-            }
-            ui.horizontal(|ui| {
-                ui.toggle_value(&mut self.show_log, "Log");
-                if ui.button("Copy log").on_hover_text("Copies the whole log to the clipboard").clicked() {
-                    let text = self.svc.status.lock().unwrap_or_else(|e| e.into_inner()).log.iter().cloned().collect::<Vec<_>>().join("\n");
-                    ui.ctx().copy_text(text);
-                    self.toast("Log copied");
-                }
-            });
-            if self.show_log {
-                egui::ScrollArea::vertical().max_height(120.0).stick_to_bottom(true).show(ui, |ui| {
-                    for l in self.svc.status.lock().unwrap_or_else(|e| e.into_inner()).log.iter() {
-                        ui.monospace(l);
-                    }
-                });
-            }
-        });
-
-        // Fixed width: a text field wider than the panel used to make the panel grow every frame.
-        let inspector = if th.inspector_left { egui::Panel::left("editor") } else { egui::Panel::right("editor") };
-        inspector.resizable(false).exact_size(th.inspector_width).show(ui, |ui| {
-            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| self.editor(ui));
-        });
-
+        self.studio_top(ui);
         let mut cmds: Vec<TileCmd> = Vec::new();
-        egui::CentralPanel::default().frame(egui::Frame::new().fill(th.window).inner_margin(egui::Margin::same(12))).show(ui, |ui| {
-            // optional background picture, behind everything in this panel
-            if let Some(path) = th.bg_image.clone() {
-                if self.bg_tex.as_ref().map(|(p, _)| p != &path).unwrap_or(true) {
-                    self.bg_tex = image::open(&path).ok().map(|img| {
-                        let img = img.thumbnail(1600, 1600).to_rgba8();
-                        let ci = egui::ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw());
-                        (path.clone(), ui.ctx().load_texture("style_bg", ci, egui::TextureOptions::LINEAR))
-                    });
-                }
-                if let Some((_, t)) = &self.bg_tex {
-                    let r = ui.max_rect();
-                    // "cover": scale to fill, crop the overflow
-                    let (iw, ih) = (t.size()[0] as f32, t.size()[1] as f32);
-                    let s = (r.width() / iw).max(r.height() / ih);
-                    let (vw, vh) = (r.width() / (iw * s), r.height() / (ih * s));
-                    let uv = Rect::from_min_max(Pos2::new((1.0 - vw) / 2.0, (1.0 - vh) / 2.0), Pos2::new((1.0 + vw) / 2.0, (1.0 + vh) / 2.0));
-                    ui.painter().image(t.id(), r, uv, Color32::WHITE.gamma_multiply(th.bg_opacity));
-                }
-            }
-            if let Some(e) = self.load_error.clone() {
-                ui.colored_label(th.error, format!("deck.toml could not be loaded, so saving is turned off: {e}"));
-                ui.horizontal(|ui| {
-                    if ui.button("Reload file").clicked() {
-                        match Config::load(&self.path) {
-                            Ok(c) => {
-                                self.cfg = c;
-                                self.load_error = None;
-                            }
-                            Err(e) => self.load_error = Some(e),
-                        }
-                    }
-                    if ui.button("Start fresh (overwrite with the sample)").clicked() {
-                        if std::fs::write(&self.path, SAMPLE).is_ok() {
-                            if let Ok(c) = Config::load(&self.path) {
-                                self.cfg = c;
-                                self.load_error = None;
-                            }
-                        }
-                    }
-                });
-                ui.separator();
-            }
-            if let Some(m) = self.style_note() {
-                ui.colored_label(th.warn, m);
-            }
-            self.deck_panel(ui, &mut cmds);
-            if th.show_hints {
-                ui.add_space(10.0);
-                ui.weak("Click a key to edit it · drag one onto another to swap · right-click for copy, paste, duplicate · Ctrl+Z undoes");
-                ui.weak("The bottom-right wide key is the deck's clock slot: it can also be a normal button.");
-            }
-        });
+        self.studio_body(ui, &mut cmds);
         for c in cmds {
             self.run_cmd(&ctx, c);
         }
 
         self.settings_window(&ctx);
+        self.macro_window(&ctx);
         self.shortcuts(&ctx);
 
         if let Some((msg, t)) = self.toast.clone() {
@@ -1507,12 +1689,46 @@ fn install_fonts(ctx: &egui::Context, symbols: &str, style_font: Option<&std::pa
     ctx.set_fonts(fonts);
 }
 
+/// Set by main when started with `--minimized`.
+pub static START_MINIMIZED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+
+fn reg(args: &[&str]) -> bool {
+    use std::os::windows::process::CommandExt;
+    std::process::Command::new("reg.exe").args(args).creation_flags(0x0800_0000).output().is_ok_and(|o| o.status.success())
+}
+
+/// Is deckd registered to start when you sign in to Windows?
+fn autostart_enabled() -> bool {
+    reg(&["query", RUN_KEY, "/v", "deckd"])
+}
+
+/// Register / remove the sign-in entry (current user only, no admin needed). It starts the window minimized. The release
+/// build is a GUI program, so no console window appears.
+fn set_autostart(on: bool) -> bool {
+    if !on {
+        return reg(&["delete", RUN_KEY, "/v", "deckd", "/f"]);
+    }
+    let Ok(exe) = std::env::current_exe() else { return false };
+    let cmd = format!("\"{}\" gui --minimized", exe.display());
+    reg(&["add", RUN_KEY, "/v", "deckd", "/t", "REG_SZ", "/d", &cmd, "/f"])
+}
+
 pub fn run(path: PathBuf) -> Result<(), String> {
     if !path.exists() {
         std::fs::write(&path, SAMPLE).map_err(|e| format!("cannot create {}: {e}", path.display()))?;
     }
+    if !crate::tray::single_instance() {
+        return Ok(()); // another deckd window is running; it was asked to come forward
+    }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_title("deckd").with_inner_size([960.0, 600.0]).with_min_inner_size([820.0, 500.0]),
+        viewport: egui::ViewportBuilder::default()
+            .with_title("deckd")
+            .with_inner_size([1360.0, 840.0])
+            .with_min_inner_size([1100.0, 640.0])
+            .with_icon(egui::IconData { rgba: crate::tray::icon_rgba(64), width: 64, height: 64 })
+            .with_visible(!START_MINIMIZED.load(std::sync::atomic::Ordering::Relaxed)),
         ..Default::default()
     };
     eframe::run_native(
@@ -1526,6 +1742,7 @@ pub fn run(path: PathBuf) -> Result<(), String> {
             let styles = Styles::new(&path);
             let committed = cfg.clone();
             let fonts_for = (String::new(), None); // forces the first apply_style to install fonts
+            crate::tray::start(cc.egui_ctx.clone());
             let repaint = cc.egui_ctx.clone();
             let svc = service::Ctx::new(false, Arc::new(move || repaint.request_repaint()));
             let (svc2, path2) = (svc.clone(), path.clone());
@@ -1554,6 +1771,12 @@ pub fn run(path: PathBuf) -> Result<(), String> {
                 restoring: false,
                 clipboard: None,
                 show_settings: false,
+                fit: 0.0,
+                lib_query: String::new(),
+                lib_pin: false,
+                autostart: autostart_enabled(),
+                macro_pop: None,
+                in_macro_window: false,                lib_cat: "All".to_string(),
                 previews: HashMap::new(),
                 bg_tex: None,
                 toast: None,

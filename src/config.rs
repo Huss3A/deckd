@@ -54,6 +54,10 @@ fn is_default_repeat(v: &u16) -> bool {
     *v == DEFAULT_REPEAT_MS
 }
 
+fn yes() -> bool {
+    true
+}
+
 fn one() -> u8 {
     1
 }
@@ -182,6 +186,18 @@ pub struct Config {
     /// Font file used for `glyph` (default: Segoe UI Symbol).
     #[serde(default = "default_font")]
     pub glyph_font: String,
+    /// Play GIFs in the window (the deck itself always animates them). Off = show the first frame.
+    #[serde(default = "yes")]
+    pub animate_gifs: bool,
+    /// City for the weather faces (looked up on Open-Meteo). Empty = no weather.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub weather_city: String,
+    /// Show weather in °F instead of °C.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub weather_fahrenheit: bool,
+    /// Draw button pictures with rounded corners in the window (the deck's own screen is unaffected).
+    #[serde(default = "yes")]
+    pub round_icons: bool,
     /// Glow feedback on the deck's buttons.
     #[serde(default)]
     pub feedback: Feedback,
@@ -200,6 +216,9 @@ pub struct Button {
     pub page: u8,
     /// "col,row" with col 0-4, row 0-2 (top-left is "0,0"). Row 2 only has cols 0-2; the rest is the clock slot.
     pub pos: String,
+    /// Pinned: shows on every page at this position (a page's own button at that position wins).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pinned: bool,
     /// Extra action when the button is tapped twice quickly.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub double: Option<Action>,
@@ -323,6 +342,12 @@ pub enum Face {
     LiveClock,
     /// CPU / memory graphs drawn by deckd as a picture (any button).
     LiveStats,
+    /// Current weather drawn by deckd (needs a city in Settings).
+    LiveWeather,
+    /// Alternates between the live clock and the weather every few seconds.
+    ClockWeather,
+    /// Time, date and weather together in one picture.
+    Everything,
 }
 
 impl Face {
@@ -335,7 +360,7 @@ impl Face {
     }
     /// deckd redraws these on a timer.
     pub fn is_live(self) -> bool {
-        matches!(self, Face::LiveClock | Face::LiveStats)
+        matches!(self, Face::LiveClock | Face::LiveStats | Face::LiveWeather | Face::ClockWeather | Face::Everything)
     }
 }
 
@@ -367,6 +392,9 @@ pub enum Action {
     Delay { ms: u32 },
     /// Type a text into the focused window (as if typed on a keyboard; line breaks press Enter).
     Text { text: String },
+    /// Bring a window to the front as if you had clicked it. `window` matches part of its title or its program name
+    /// (case does not matter), e.g. "discord" or "Untitled - Notepad".
+    Focus { window: String },
     /// Several actions run in order on their own thread (no pages or nested macros inside).
     Macro { steps: Vec<Action> },
 }
@@ -452,7 +480,8 @@ impl Config {
 
     /// The button for an index reported by the deck (index = row*5 + col) on a page.
     pub fn button_for_index(&self, page: u8, index: u8) -> Option<&Button> {
-        self.buttons.iter().find(|b| b.page == page && b.cell().map(|(c, r)| r * COLS + c) == Ok(index))
+        let at = |b: &&Button| b.cell().map(|(c, r)| r * COLS + c) == Ok(index);
+        self.buttons.iter().filter(at).find(|b| b.page == page).or_else(|| self.buttons.iter().filter(at).find(|b| b.pinned))
     }
 
     /// The wide slot's display mode for the heartbeat: 1 = firmware clock, 0 = firmware stats, 2 = our own picture.
@@ -465,12 +494,16 @@ impl Config {
     }
 
     pub fn button_at(&self, page: u8, col: u8, row: u8) -> Option<&Button> {
-        self.buttons.iter().find(|b| b.page == page && b.cell() == Ok((col, row)))
+        let at = |b: &&Button| b.cell() == Ok((col, row));
+        // the page's own button, else one pinned to all pages
+        self.buttons.iter().filter(at).find(|b| b.page == page).or_else(|| self.buttons.iter().filter(at).find(|b| b.pinned))
     }
 
-    /// The button at (col, row) on a page, created empty if it does not exist yet.
+    /// The button at (col, row) on a page, created empty if it does not exist yet. A pinned button from another page is
+    /// returned as it is (editing it edits it everywhere).
     pub fn button_mut(&mut self, page: u8, col: u8, row: u8) -> &mut Button {
-        let i = match self.buttons.iter().position(|b| b.page == page && b.cell() == Ok((col, row))) {
+        let own = self.buttons.iter().position(|b| b.page == page && b.cell() == Ok((col, row)));
+        let i = match own.or_else(|| self.buttons.iter().position(|b| b.pinned && b.cell() == Ok((col, row)))) {
             Some(i) => i,
             None => {
                 self.buttons.push(Button { page, pos: format!("{col},{row}"), ..Button::default() });
@@ -481,7 +514,12 @@ impl Config {
     }
 
     pub fn clear_button(&mut self, page: u8, col: u8, row: u8) {
+        let had_own = self.buttons.iter().any(|b| b.page == page && b.cell() == Ok((col, row)));
         self.buttons.retain(|b| !(b.page == page && b.cell() == Ok((col, row))));
+        // clearing a key that only shows because it is pinned elsewhere: leave an empty key on this page instead
+        if !had_own && self.button_at(page, col, row).is_some() {
+            self.buttons.push(Button { page, pos: format!("{col},{row}"), ..Button::default() });
+        }
     }
 
     /// Write to disk atomically (temp file + rename) so a running service never reads a half-written file.
@@ -497,13 +535,13 @@ impl Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Config { brightness: default_brightness(), pages: 1, glyph_font: default_font(), feedback: Feedback::default(), buttons: Vec::new(), base_dir: PathBuf::new() }
+        Config { brightness: default_brightness(), pages: 1, glyph_font: default_font(), animate_gifs: true, weather_city: String::new(), weather_fahrenheit: false, round_icons: true, feedback: Feedback::default(), buttons: Vec::new(), base_dir: PathBuf::new() }
     }
 }
 
 impl Default for Button {
     fn default() -> Self {
-        Button { page: 1, pos: String::new(), double: None, holds: Vec::new(), hold: None, hold_ms: DEFAULT_HOLD_MS, hold_long: None, hold_long_ms: DEFAULT_LONG_MS, repeat: None, repeat_ms: DEFAULT_REPEAT_MS, tap_hold: None, window_ms: DEFAULT_WINDOW_MS, label: None, color: None, icon: None, glyph: None, glyph_color: None, action: None, state: None, alt: None, keep_clock: false, face: Face::Image, refresh_ms: DEFAULT_REFRESH_MS, clock_format: None, stats_style: None, rim_tap: None, rim_double: None }
+        Button { page: 1, pos: String::new(), pinned: false, double: None, holds: Vec::new(), hold: None, hold_ms: DEFAULT_HOLD_MS, hold_long: None, hold_long_ms: DEFAULT_LONG_MS, repeat: None, repeat_ms: DEFAULT_REPEAT_MS, tap_hold: None, window_ms: DEFAULT_WINDOW_MS, label: None, color: None, icon: None, glyph: None, glyph_color: None, action: None, state: None, alt: None, keep_clock: false, face: Face::Image, refresh_ms: DEFAULT_REFRESH_MS, clock_format: None, stats_style: None, rim_tap: None, rim_double: None }
     }
 }
 

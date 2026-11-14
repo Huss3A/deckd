@@ -1,2 +1,7 @@
 target/
 *.zip
+
+# local/private
+deck.toml
+*.log
+captures/

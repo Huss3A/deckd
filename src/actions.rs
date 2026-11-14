@@ -90,6 +90,7 @@ pub fn validate(action: &Action) -> Result<(), String> {
             n if n.parse::<u8>().is_ok_and(|p| (1..=crate::config::MAX_PAGES).contains(&p)) => Ok(()),
             other => Err(format!("bad page target {other:?}: use next, prev, home or a page number 1-{}", crate::config::MAX_PAGES)),
         },
+        Action::Focus { window } if window.trim().is_empty() => Err("focus action needs a window title or program name".into()),
         Action::Delay { ms } if !(10..=60_000).contains(ms) => Err(format!("delay {ms} ms must be 10-60000")),
         Action::Text { text } if text.is_empty() => Err("text step is empty".into()),
         Action::Text { text } if text.chars().count() > crate::config::TEXT_MAX_CHARS => {
@@ -143,6 +144,118 @@ fn type_text(text: &str) {
         press(&seq);
         std::thread::sleep(std::time::Duration::from_millis(4));
     }
+}
+
+/// Visible top-level windows as (title, program file name), top of the stack first.
+pub fn list_windows() -> Vec<(String, String)> {
+    use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM};
+    use windows_sys::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW};
+    use windows_sys::Win32::UI::WindowsAndMessaging::*;
+
+    unsafe extern "system" fn visit(hwnd: HWND, lparam: LPARAM) -> i32 {
+        unsafe {
+            let out = &mut *(lparam as *mut Vec<(String, String)>);
+            if IsWindowVisible(hwnd) == 0 {
+                return 1;
+            }
+            let mut buf = [0u16; 512];
+            let n = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
+            if n <= 0 {
+                return 1;
+            }
+            let title = String::from_utf16_lossy(&buf[..n as usize]);
+            if title == "Program Manager" {
+                return 1;
+            }
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(hwnd, &mut pid);
+            let mut exe = String::new();
+            let h = OpenProcess(0x1000, 0, pid);
+            if !h.is_null() {
+                let mut path = [0u16; 520];
+                let mut len = path.len() as u32;
+                if QueryFullProcessImageNameW(h, 0, path.as_mut_ptr(), &mut len) != 0 {
+                    exe = String::from_utf16_lossy(&path[..len as usize]).rsplit('\\').next().unwrap_or("").to_string();
+                }
+                CloseHandle(h);
+            }
+            out.push((title, exe));
+            1
+        }
+    }
+
+    let mut out: Vec<(String, String)> = Vec::new();
+    unsafe {
+        EnumWindows(Some(visit), &mut out as *mut Vec<(String, String)> as LPARAM);
+    }
+    out
+}
+
+/// Bring the first visible window whose title or program name contains `query` to the front (restoring it if minimized).
+/// Returns the title of the window that was focused.
+fn focus_window(query: &str) -> Result<String, String> {
+    use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM};
+    use windows_sys::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW};
+    use windows_sys::Win32::UI::WindowsAndMessaging::*;
+
+    struct Search {
+        query: String,
+        found: Option<(HWND, String)>,
+    }
+
+    unsafe extern "system" fn visit(hwnd: HWND, lparam: LPARAM) -> i32 {
+        unsafe {
+            let s = &mut *(lparam as *mut Search);
+            if IsWindowVisible(hwnd) == 0 {
+                return 1;
+            }
+            let mut buf = [0u16; 512];
+            let n = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
+            if n <= 0 {
+                return 1;
+            }
+            let title = String::from_utf16_lossy(&buf[..n as usize]);
+            if title == "Program Manager" {
+                return 1;
+            }
+            let mut exe = String::new();
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(hwnd, &mut pid);
+            let h = OpenProcess(0x1000, 0, pid); // PROCESS_QUERY_LIMITED_INFORMATION
+            if !h.is_null() {
+                let mut path = [0u16; 520];
+                let mut len = path.len() as u32;
+                if QueryFullProcessImageNameW(h, 0, path.as_mut_ptr(), &mut len) != 0 {
+                    let full = String::from_utf16_lossy(&path[..len as usize]);
+                    exe = full.rsplit('\\').next().unwrap_or("").to_lowercase();
+                }
+                CloseHandle(h);
+            }
+            if title.to_lowercase().contains(&s.query) || exe.contains(&s.query) {
+                s.found = Some((hwnd, title));
+                return 0; // stop: the first match from the top of the stack
+            }
+            1
+        }
+    }
+
+    let mut search = Search { query: query.trim().to_lowercase(), found: None };
+    unsafe {
+        EnumWindows(Some(visit), &mut search as *mut Search as LPARAM);
+    }
+    let (hwnd, title) = search.found.ok_or_else(|| format!("no open window matches {query:?}"))?;
+    unsafe {
+        if IsIconic(hwnd) != 0 {
+            ShowWindow(hwnd, SW_RESTORE);
+        }
+        // Windows only lets a program take the foreground right after it has seen keyboard input: a tap of Alt counts
+        press(&[key_event(VK_MENU, false), key_event(VK_MENU, true)]);
+        BringWindowToTop(hwnd);
+        if SetForegroundWindow(hwnd) == 0 {
+            return Err(format!("Windows would not let {title:?} take the focus"));
+        }
+    }
+    Ok(title)
 }
 
 fn key_event(vk: u16, up: bool) -> INPUT {
@@ -223,6 +336,10 @@ fn execute_single(action: &Action, log: &dyn Fn(String)) -> Result<(), String> {
             press(&[key_event(vk, false), key_event(vk, true)]);
         }
         Action::Page { .. } => return Err("page switches only happen on the deck itself".into()),
+        Action::Focus { window } => {
+            let title = focus_window(window)?;
+            log(format!("focused window {title:?}"));
+        }
         Action::Print { text } => log(format!("PRINT: {text}")),
         // handled in execute_logged
         Action::Delay { .. } | Action::Text { .. } | Action::Macro { .. } => unreachable!(),

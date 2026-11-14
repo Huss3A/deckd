@@ -1,5 +1,9 @@
 # deckd
 
+> **AI disclosure:** the majority of this project's code was written with AI assistance,
+> directed and tested on real hardware by the owner. Treat it accordingly: read the code before you trust it with
+> anything important, and expect rough edges.
+
 A lightweight Rust replacement for Ulanzi Studio, for personal use with my own **Ulanzi D200H** deck
 (USB `2207:0019`). Single ~7 MB executable instead of a ~200 MB Qt/WebEngine app.
 
@@ -12,10 +16,9 @@ Protocol knowledge lives in [NOTES.md](NOTES.md). Instructions for AI agents wor
 3. **A CLI for agents.** AI agents should be able to inspect and change the deck, simulate presses, preview layouts and read
    events without a GUI, with machine-readable output and safe defaults. *(offline commands built: status, list, get, set, clear,
    set-brightness, validate, preview, press, schema; live `events`/connection status need IPC; see [AGENTS.md](AGENTS.md))*
-4. Run at login, hidden, no console window. *(not built)*
-5. Wide slot control: custom clock / system stats / image or GIF. *(researched, not built)*
-6. Multi-page layouts *(built, untested on the deck)*, double-tap and hold actions *(built, untested on the deck)*;
-   real program icons for `run` buttons *(not built)*.
+4. Run at login, hidden, no console window. *(built: Settings > Launch on Startup, tray icon, close hides to the tray)*
+5. Wide slot control: clock / date / weather / system stats / image or GIF. *(built)*
+6. Multi-page layouts, double-tap and hold actions, macros, pinned keys, real program icons for `run` buttons. *(built)*
 
 ## Status (2026-11-14)
 
@@ -157,3 +160,7 @@ that feeds the deck; per-button rim colors sit next to the gesture they belong t
 | `tools/hook_hid.js` | Frida hook that logged Ulanzi Studio's HID traffic |
 | `tools/*.py`, `tools/*.ps1` | Early test scripts |
 | `captures/` | Captured traffic and real layout ZIPs from Ulanzi Studio |
+
+## License
+
+MIT, see [LICENSE](LICENSE).

@@ -135,6 +135,7 @@ fn describe(a: &Action) -> String {
         Action::Open { target } => format!("open {target}"),
         Action::Hotkey { keys } => format!("hotkey {keys}"),
         Action::Media { key } => format!("media {key}"),
+        Action::Focus { window } => format!("focus window {window:?}"),
         Action::Delay { ms } => format!("wait {ms} ms"),
         Action::Text { text } => format!("type {text:?}"),
         Action::Macro { steps } => format!("macro: {}", steps.iter().map(describe).collect::<Vec<_>>().join(" -> ")),
@@ -193,6 +194,9 @@ pub fn run(cmd: &str, raw: &[String]) -> Result<(), CliError> {
                     "image" => Face::Image,
                     "live_clock" => Face::LiveClock,
                     "live_stats" => Face::LiveStats,
+                    "live_weather" => Face::LiveWeather,
+                    "clock_weather" => Face::ClockWeather,
+                    "everything" => Face::Everything,
                     "clock" => Face::Clock,
                     "stats" => Face::Stats,
                     _ => return Err(usage("--face must be image, live_clock, live_stats, clock or stats")),
@@ -277,7 +281,8 @@ pub fn run(cmd: &str, raw: &[String]) -> Result<(), CliError> {
                     "media" => Some(Action::Media { key: need("key")? }),
                     "delay" => Some(Action::Delay { ms: need("ms")?.parse().map_err(|_| usage("--ms must be a number 10-60000"))? }),
                     "text" => Some(Action::Text { text: need("text")? }),
-                    other => return Err(usage(format!("unknown --action-type {other:?}; use run|open|hotkey|media|page|print|delay|text|none"))),
+                    "focus" => Some(Action::Focus { window: need("window")? }),
+                    other => return Err(usage(format!("unknown --action-type {other:?}; use run|open|hotkey|media|page|print|delay|text|focus|none"))),
                 };
                 // --append adds the action as the next step of a macro in that gesture (a plain action there becomes
                 // step 1 of a new macro). Without it the action replaces whatever was there.

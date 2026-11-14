@@ -10,7 +10,9 @@
 //!   deckd brightness <0-100>
 //!   deckd upload|patch <file.zip> [seconds]
 
-#![cfg_attr(all(not(debug_assertions), feature = "windowed"), windows_subsystem = "windows")]
+// Release builds are Windows (GUI) programs, so starting the window never opens a console. The command-line commands attach to the
+// console they were started from (see `attach_console`).
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![recursion_limit = "512"] // the agent schema is one big json! literal
 
 mod actions;
@@ -19,10 +21,13 @@ mod audio;
 mod config;
 mod gui;
 mod layout;
+mod macro_ui;
 mod protocol;
 mod service;
 mod sysstats;
 mod theme;
+mod tray;
+mod weather;
 
 use config::{Config, SAMPLE};
 use hidapi::{HidApi, HidDevice};
@@ -72,8 +77,34 @@ fn with_deck<T>(f: impl FnOnce(&HidDevice) -> Result<T, String>) -> Result<T, St
     f(&protocol::open(&api)?)
 }
 
+/// A GUI-subsystem program has no console of its own. For command-line use, join the one it was started from and, when the
+/// standard handles are not already redirected (a pipe or file keeps working as is), point them at that console.
+fn attach_console() {
+    use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING};
+    use windows_sys::Win32::System::Console::{AttachConsole, GetStdHandle, SetStdHandle, ATTACH_PARENT_PROCESS, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE};
+    unsafe {
+        AttachConsole(ATTACH_PARENT_PROCESS);
+        for (id, name) in [(STD_OUTPUT_HANDLE, "CONOUT$"), (STD_ERROR_HANDLE, "CONOUT$"), (STD_INPUT_HANDLE, "CONIN$")] {
+            let h = GetStdHandle(id);
+            if h.is_null() || h == INVALID_HANDLE_VALUE {
+                let wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+                let new = CreateFileW(wide.as_ptr(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, std::ptr::null(), OPEN_EXISTING, 0, std::ptr::null_mut());
+                if new != INVALID_HANDLE_VALUE {
+                    SetStdHandle(id, new);
+                }
+            }
+        }
+    }
+}
+
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    if std::env::args().nth(1).is_some_and(|c| c != "gui" && c != "--minimized") {
+        attach_console();
+    }
+    // `--minimized` (used by "start with Windows") opens the window minimized instead of in front
+    gui::START_MINIMIZED.store(std::env::args().any(|a| a == "--minimized"), std::sync::atomic::Ordering::Relaxed);
+    let args: Vec<String> = std::env::args().skip(1).filter(|a| a != "--minimized").collect();
     let arg = |i: usize| args.get(i).map(String::as_str);
     let config_path = |i: usize| arg(i).map(PathBuf::from).unwrap_or_else(config::default_path);
     let secs = |i: usize, default: u64| arg(i).and_then(|s| s.parse().ok()).unwrap_or(default);

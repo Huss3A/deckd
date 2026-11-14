@@ -87,26 +87,26 @@ impl Theme {
                 author: String::new(),
                 description: "The default dark style".into(),
                 dark,
-                window: c("#181a1f"),
-                panel: c("#1f2228"),
-                card: c("#262a32"),
-                input: c("#14161a"),
-                text: c("#e6e8eb"),
-                text_dim: c("#8b93a0"),
-                accent: c("#2f81f7"),
-                accent_text: c("#ffffff"),
-                border: c("#363b45"),
-                hover: c("#30353f"),
-                select: c("#58a6ff"),
-                ok: c("#3fb950"),
-                warn: c("#d29922"),
-                error: c("#ff7b72"),
-                tile_empty: c("#202020"),
-                tile_border: c("#464b55"),
-                press: c("#f2cc3a"),
-                rounding: 6,
-                tile_rounding: 9.0,
-                card_rounding: 8,
+                window: c("#0b0e14"),
+                panel: c("#111722"),
+                card: c("#172131"),
+                input: c("#0c121b"),
+                text: c("#e8edf5"),
+                text_dim: c("#8a98ad"),
+                accent: c("#7c9cff"),
+                accent_text: c("#08101f"),
+                border: c("#263244"),
+                hover: c("#202d44"),
+                select: c("#9db4ff"),
+                ok: c("#50d6bd"),
+                warn: c("#ffb86b"),
+                error: c("#ff7185"),
+                tile_empty: c("#141b27"),
+                tile_border: c("#2a3648"),
+                press: c("#ffd479"),
+                rounding: 9,
+                tile_rounding: 13.0,
+                card_rounding: 14,
                 border_width: 1.0,
                 tile_size: 92.0,
                 tile_gap: 8.0,
@@ -352,12 +352,12 @@ impl Theme {
         w.inactive.fg_stroke = Stroke::new(1.0, self.text);
         w.hovered.bg_fill = self.hover;
         w.hovered.weak_bg_fill = self.hover;
-        w.hovered.bg_stroke = Stroke::new(self.border_width.max(1.0), self.accent);
+        w.hovered.bg_stroke = Stroke::new(self.border_width.max(1.0), self.select.gamma_multiply(0.55));
         w.hovered.fg_stroke = Stroke::new(1.5, self.text);
         w.active.bg_fill = self.accent;
         w.active.weak_bg_fill = self.accent;
         w.active.bg_stroke = Stroke::new(self.border_width.max(1.0), self.accent);
-        w.active.fg_stroke = Stroke::new(1.5, self.accent_text);
+        w.active.fg_stroke = Stroke::new(1.5, self.text);
         w.open.bg_fill = self.hover;
         w.open.weak_bg_fill = self.hover;
         for wv in [&mut w.noninteractive, &mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
@@ -366,7 +366,7 @@ impl Theme {
         ctx.set_visuals(v);
 
         ctx.all_styles_mut(|s| {
-            let (item, pad, indent) = if self.compact { (egui::vec2(6.0, 3.0), egui::vec2(6.0, 2.0), 14.0) } else { (egui::vec2(8.0, 6.0), egui::vec2(10.0, 4.0), 18.0) };
+            let (item, pad, indent) = if self.compact { (egui::vec2(6.0, 3.0), egui::vec2(6.0, 2.0), 14.0) } else { (egui::vec2(8.0, 8.0), egui::vec2(12.0, 5.0), 18.0) };
             s.spacing.item_spacing = item;
             s.spacing.button_padding = pad;
             s.spacing.indent = indent;

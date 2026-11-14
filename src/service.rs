@@ -29,6 +29,8 @@ pub struct Status {
     pub config_error: Option<String>,
     /// Page currently shown on the deck (1-based, 0 = not connected yet).
     pub page: u8,
+    /// Rim color currently shown on each deck button (None = plain tile); the window mirrors it.
+    pub rims: [Option<[u8; 3]>; 14],
 }
 
 #[derive(Clone)]
@@ -106,9 +108,18 @@ fn modified(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
+/// Hash of the picture each deck cell currently shows (so an identical picture is never sent twice in a row).
+static LAST_SENT: Mutex<[Option<u64>; 14]> = Mutex::new([None; 14]);
+
 fn upload_layout(dev: &HidDevice, cfg: &Config, page: u8, ctx: &Ctx, live: &layout::Live) -> Result<(), String> {
     let zip = layout::build_zip_live(cfg, page, live)?;
     protocol::upload_zip(dev, cmd::FULL_LAYOUT, &zip, true)?;
+    let mut hashes = [None; 14];
+    for (i, h) in hashes.iter_mut().enumerate() {
+        *h = layout::cell_png_hash(cfg, page, (i % 5) as u8, (i / 5) as u8, None, live);
+    }
+    *LAST_SENT.lock().unwrap_or_else(|e| e.into_inner()) = hashes;
+    ctx.with(|s| s.rims = [None; 14]); // a full layout carries no rims
     ctx.log(format!("page {page}/{}: layout uploaded ({} bytes)", cfg.page_count(), zip.len()));
     Ok(())
 }
@@ -133,13 +144,28 @@ enum Glow {
 /// Flash requests collected while handling a press; the session loop sends them to the deck.
 type GlowQueue = Vec<(u8, Glow)>;
 
-fn send_cell(dev: &HidDevice, cfg: &Config, page: u8, idx: usize, rim: Option<([u8; 3], u32, u32)>, live: &layout::Live) -> Result<(), String> {
+fn send_cell(dev: &HidDevice, ctx: &Ctx, cfg: &Config, page: u8, idx: usize, rim: Option<([u8; 3], u32, u32)>, live: &layout::Live) -> Result<(), String> {
     // a wide slot whose display belongs to the firmware (clock / stats) has no picture to draw a rim on
     if idx == 13 && cfg.button_at(page, 3, 2).is_some_and(|b| b.face.is_firmware()) {
         return Ok(());
     }
-    let zip = layout::cell_zip(cfg, page, (idx % 5) as u8, (idx / 5) as u8, rim, live)?;
-    protocol::upload_zip(dev, cmd::PARTIAL_LAYOUT, &zip, false)
+    let (col, row) = ((idx % 5) as u8, (idx / 5) as u8);
+    // Re-sending the picture the cell already shows (same name, same content) makes the deck blank it: skip those.
+    let hash = layout::cell_png_hash(cfg, page, col, row, rim, live);
+    let unchanged = hash.is_some() && idx < 14 && LAST_SENT.lock().unwrap_or_else(|e| e.into_inner())[idx] == hash;
+    if !unchanged {
+        let zip = layout::cell_zip(cfg, page, col, row, rim, live)?;
+        protocol::upload_zip(dev, cmd::PARTIAL_LAYOUT, &zip, false)?;
+        if idx < 14 {
+            LAST_SENT.lock().unwrap_or_else(|e| e.into_inner())[idx] = hash;
+        }
+    }
+    // let the window show the same rim the deck now shows
+    let color = rim.map(|r| r.0);
+    if idx < 14 && ctx.status.lock().unwrap_or_else(|e| e.into_inner()).rims[idx] != color {
+        ctx.with(|s| s.rims[idx] = color);
+    }
+    Ok(())
 }
 
 /// Per-button press tracking for double-tap and hold.
@@ -377,6 +403,8 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
         let mut switch: Option<u8> = None;
         let mut glow_q: GlowQueue = Vec::new();
         let mut glow_until: [Option<Instant>; 14] =[None; 14];
+        // wide slot: when its last event came (the firmware reacts to touches on that slot, so we redraw our picture afterwards)
+        let mut wide_event: Option<Instant> = None;
         let mut buf = [0u8; PACKET + 1];
         loop {
             if ctx.stopping() {
@@ -433,7 +461,7 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                         last_draw[i] = Instant::now();
                         last_frame[i] = frame;
                         last_active[i] = live.active[i];
-                        if let Err(e) = send_cell(&dev, cfg, page, i, None, &live) {
+                        if let Err(e) = send_cell(&dev, ctx, cfg, page, i, None, &live) {
                             ctx.log(format!("live redraw failed on button {i}: {e}"));
                         }
                     }
@@ -471,6 +499,28 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                     }
                 }
             }
+            // Wide slot: a tap there arrives as a burst whose last event may be a "down" with no "up", which would freeze the clock
+            // (live redraws pause while a key counts as down). Treat a down that outlived any hold step as released, then redraw
+            // our picture once the touches have settled (the firmware itself reacts to touches on that slot).
+            if keys[13].down.is_some_and(|d| {
+                let longest = cfg.button_for_index(page, 13).and_then(|b| b.holds.iter().map(|h| h.ms as u64).max()).unwrap_or(0);
+                d.elapsed() > Duration::from_millis(longest.max(1500) + 1500)
+            }) && !keys[13].repeating
+            {
+                ctx.log("wide slot: no release arrived, treating it as released");
+                keys[13].down = None;
+                keys[13].armed = false;
+                keys[13].tier_shown = None;
+                glow_until[13] = Some(Instant::now());
+            }
+            if wide_event.is_some_and(|t| t.elapsed() > Duration::from_millis(1500)) && keys[13].down.is_none() && glow_until[13].is_none() {
+                wide_event = None;
+                last_draw[13] = Instant::now();
+                last_frame[13] = None;
+                if let Err(e) = send_cell(&dev, ctx, cfg, page, 13, None, &live) {
+                    ctx.log(format!("wide redraw failed: {e}"));
+                }
+            }
             // timers: hold threshold reached, or the double-tap window ran out
             for i in 0..14usize {
                 let b = cfg.button_for_index(page, i as u8);
@@ -506,7 +556,7 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                         if let (Some(ms), true) = (top, top != keys[i].tier_shown) {
                             let fb = &cfg.feedback;
                             let rgb = fb.tier_color(b, ms);
-                            match send_cell(&dev, cfg, page, i, Some((rgb, fb.width as u32, fb.radius as u32)), &live) {
+                            match send_cell(&dev, ctx, cfg, page, i, Some((rgb, fb.width as u32, fb.radius as u32)), &live) {
                                 Ok(()) => {
                                     keys[i].tier_shown = Some(ms);
                                     glow_until[i] = Some(Instant::now() + Duration::from_secs(REPEAT_MAX_SECS + 1)); // until release
@@ -541,7 +591,7 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                     Glow::Repeat => &fb.repeat,
                 };
                 let rgb = crate::config::parse_hex(hex).unwrap_or([255, 255, 255]);
-                match send_cell(&dev, cfg, page, idx as usize, Some((rgb, fb.width as u32, fb.radius as u32)), &live) {
+                match send_cell(&dev, ctx, cfg, page, idx as usize, Some((rgb, fb.width as u32, fb.radius as u32)), &live) {
                     Ok(()) => {
                         ctx.log(format!("rim: {g:?} on button {idx} (#{:02x}{:02x}{:02x})", rgb[0], rgb[1], rgb[2]));
                         // a repeat keeps its rim until release (the release handler ends it)
@@ -565,7 +615,7 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                     last_draw[i] = Instant::now();
                     last_frame[i] = None;
                     last_active[i] = live.active[i];
-                    if let Err(e) = send_cell(&dev, cfg, page, i, None, &live) {
+                    if let Err(e) = send_cell(&dev, ctx, cfg, page, i, None, &live) {
                         ctx.log(format!("glow restore failed: {e}"));
                     }
                 }
@@ -575,6 +625,9 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                 n => match protocol::parse(&buf[..n]) {
                     Some(Event::Button { index, state, pressed }) if (index as usize) < 14 && wide.accept(index, state, pressed) => {
                         let i = index as usize;
+                        if i == 13 {
+                            wide_event = Some(Instant::now());
+                        }
                         let b = cfg.button_for_index(page, index);
                         let (has_double, has_hold) = (b.is_some_and(|b| b.double.is_some()), b.is_some_and(|b| !b.holds.is_empty()));
                         let has_tap_hold = b.is_some_and(|b| b.tap_hold.is_some());

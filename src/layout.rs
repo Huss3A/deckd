@@ -106,6 +106,18 @@ pub fn gif_frame_index(b: &Button, cfg: &Config, wide: bool, tick_ms: u64) -> Op
     (g.frames.len() > 1).then(|| gif_at(&g, tick_ms).0)
 }
 
+/// For the window: which GIF frame shows at `tick_ms` and how many ms it stays up. None when unreadable.
+pub fn gif_index_at(full: &std::path::Path, tick_ms: u64) -> Option<(usize, u64)> {
+    let g = load_gif(full, ICON).ok()?;
+    Some(gif_at(&g, tick_ms))
+}
+
+/// One frame of a GIF (square tile size).
+pub fn gif_frame_image(full: &std::path::Path, idx: usize) -> Option<RgbaImage> {
+    let g = load_gif(full, ICON).ok()?;
+    g.frames.get(idx).map(|f| f.0.clone())
+}
+
 // ---- drawing helpers for live faces ----
 fn fill_rect(img: &mut RgbaImage, x0: i32, y0: i32, x1: i32, y1: i32, c: Rgba<u8>) {
     for y in y0.max(0)..y1.min(img.height() as i32) {
@@ -194,6 +206,59 @@ fn render_live_clock(b: &Button, font: Option<&FontVec>, w: u32, live: &Live) ->
     let mut img = RgbaImage::from_pixel(w, ICON, bg);
     let text = live.now.format(b.clock_format.as_deref().unwrap_or("%H:%M")).to_string();
     text_block(&mut img, font, &text, fg, w as f32 / 2.0, 82.0, w as f32 - 24.0, 140.0, 130.0).map_err(|e| format!("button {:?}: {e}", b.pos))?;
+    png_bytes(&img)
+}
+
+fn render_weather(b: &Button, cfg: &Config, font: Option<&FontVec>, w: u32) -> Result<Vec<u8>, String> {
+    let font = need_font(font, b)?;
+    let (bg, fg) = colors(b)?;
+    let mut img = RgbaImage::from_pixel(w, ICON, bg);
+    let dim = Rgba([fg.0[0], fg.0[1], fg.0[2], 255]);
+    let (cx, big_w) = (w as f32 / 2.0, w as f32 - 24.0);
+    if cfg.weather_city.trim().is_empty() {
+        text_block(&mut img, font, "Set a city\nin Settings", dim, cx, 98.0, big_w, 150.0, 40.0).map_err(|e| format!("button {:?}: {e}", b.pos))?;
+    } else if let Some(wx) = crate::weather::current(&cfg.weather_city) {
+        let (sym, words) = crate::weather::describe(wx.code, wx.is_day);
+        let temp = if cfg.weather_fahrenheit { format!("{:.0}°F", wx.temp_c * 9.0 / 5.0 + 32.0) } else { format!("{:.0}°C", wx.temp_c) };
+        text_block(&mut img, font, &format!("{sym} {temp}"), fg, cx, 70.0, big_w, 100.0, 110.0).map_err(|e| format!("button {:?}: {e}", b.pos))?;
+        text_block(&mut img, font, &format!("{words} · {}", wx.place), dim, cx, 150.0, big_w, 36.0, 30.0).map_err(|e| format!("button {:?}: {e}", b.pos))?;
+    } else {
+        text_block(&mut img, font, "Weather…", dim, cx, 98.0, big_w, 60.0, 44.0).map_err(|e| format!("button {:?}: {e}", b.pos))?;
+    }
+    png_bytes(&img)
+}
+
+/// Time (big), date and weather in one picture. The clock format only changes the time line.
+fn render_everything(b: &Button, cfg: &Config, font: Option<&FontVec>, w: u32, live: &Live) -> Result<Vec<u8>, String> {
+    let font = need_font(font, b)?;
+    let (bg, fg) = colors(b)?;
+    let mut img = RgbaImage::from_pixel(w, ICON, bg);
+    let cx = w as f32 / 2.0;
+    let big_w = w as f32 - 24.0;
+    let err = |e: String| format!("button {:?}: {e}", b.pos);
+    // Time and date are one big block, both lines the same size. A clock format that already contains a date ("time + date")
+    // is drawn as is; otherwise the date is added as the second line.
+    let fmt = b.clock_format.as_deref().filter(|f| !f.trim().is_empty()).unwrap_or("%H:%M");
+    let has_date = ["%a", "%A", "%d", "%e", "%b", "%B", "%m", "%y", "%Y", "%j", "%D", "%F", "%x", "%c"].iter().any(|c| fmt.contains(c));
+    let time = live.now.format(&if has_date { fmt.to_string() } else { format!("{fmt}\n%a %d %b") }).to_string();
+    let weather = if cfg.weather_city.trim().is_empty() {
+        None
+    } else {
+        Some(match crate::weather::current(&cfg.weather_city) {
+            Some(wx) => {
+                let (sym, words) = crate::weather::describe(wx.code, wx.is_day);
+                let temp = if cfg.weather_fahrenheit { format!("{:.0}°F", wx.temp_c * 9.0 / 5.0 + 32.0) } else { format!("{:.0}°C", wx.temp_c) };
+                format!("{sym} {temp} · {words}")
+            }
+            None => "Weather…".to_string(),
+        })
+    };
+    if let Some(wl) = weather {
+        text_block(&mut img, font, &time, fg, cx, 60.0, big_w, 116.0, 110.0).map_err(err)?;
+        text_block(&mut img, font, &wl, fg, cx, 152.0, big_w, 62.0, 56.0).map_err(err)?;
+    } else {
+        text_block(&mut img, font, &time, fg, cx, 98.0, big_w, 180.0, 130.0).map_err(err)?;
+    }
     png_bytes(&img)
 }
 
@@ -346,6 +411,11 @@ fn render_icon(b: Option<&Button>, cfg: &Config, font: Option<&FontVec>, w: u32,
         match b.face {
             Face::LiveClock => return render_live_clock(b, font, w, live),
             Face::LiveStats => return render_live_stats(b, font, w, live),
+            Face::LiveWeather => return render_weather(b, cfg, font, w),
+            Face::Everything => return render_everything(b, cfg, font, w, live),
+            // alternate every 6 s: clock, then weather
+            Face::ClockWeather if (live.now.timestamp() / 6) % 2 == 1 => return render_weather(b, cfg, font, w),
+            Face::ClockWeather => return render_live_clock(b, font, w, live),
             _ => {}
         }
         if let Some(path) = b.icon.as_deref().filter(|p| is_gif(p)) {
@@ -415,6 +485,23 @@ fn draw_rim(img: &mut RgbaImage, rgb: [u8; 3], width: u32, radius: u32) {
             }
         }
     }
+}
+
+/// Hash of the picture a cell would show (same content = same hash = same filename on the deck).
+/// None for a cell the firmware draws itself.
+pub fn cell_png_hash(cfg: &Config, page: u8, col: u8, row: u8, rim: Option<([u8; 3], u32, u32)>, live: &Live) -> Option<u64> {
+    let glyph_font = load_font(cfg).ok()?;
+    let shown = cfg.button_at(page, col, row).map(|b| b.shown(live.active[(row * COLS + col) as usize]));
+    if shown.as_ref().is_some_and(|b| b.face.is_firmware()) || ((col, row) == (3, 2) && shown.is_none()) {
+        return None;
+    }
+    let mut png = render_icon(shown.as_ref(), cfg, glyph_font.as_deref(), cell_width(col, row), live).ok()?;
+    if let Some((rgb, width, radius)) = rim {
+        let mut img = image::load_from_memory(&png).ok()?.to_rgba8();
+        draw_rim(&mut img, rgb, width, radius);
+        png = png_bytes(&img).ok()?;
+    }
+    Some(fnv1a(&png))
 }
 
 /// A one-cell update (for command 0x000D): same ZIP layout as the stock app's partial updates.
