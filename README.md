@@ -79,6 +79,14 @@ firmware clock and `"stats"` hands the slot to the firmware's CPU/RAM readout (h
 draws a picture or a rim, so the button's actions still work under them. CLI: `deckd set 3,2 --face live_clock --clock-format %H:%M`.
 (Live faces and GIFs are built but not yet tried on the deck; the firmware stats mode comes from community docs only.)
 
+**State-aware buttons (icon flips, e.g. mute):** give a button an `[button.alt]` look (`label`, `color`, `glyph`, `glyph_color`, `icon`; whatever
+is set replaces the normal look while the state is "on") and a `state`: `toggle` (default; flips on every tap of the normal action, kept
+in memory only), `output_muted` (the default speaker is muted: follows the `mute` media key and anything else that mutes it) or
+`mic_muted` (the default microphone is muted). The media key `mic_mute` flips the microphone mute directly, in every app, so a mic
+button is `action = media mic_mute` + `state = "mic_muted"`. Window: "Alternate look" with one-click Mic mute / Speaker mute presets.
+CLI: `deckd set 0,0 --action-type media --key mic_mute --state mic_muted --alt-label "Mic MUTED" --alt-color "#b62324"`,
+`deckd preview --alt` renders the alternate looks, `deckd audio` prints the current mute states (read-only). Not tried on the deck yet.
+
 **Pages:** top-level `pages = N` (1-9) and `page = 2` on a button (omitted = page 1). A `page` action on a button switches
 the deck to another page (the service re-uploads that page's layout, ~1 s). Put a "back" button on each later page yourself.
 

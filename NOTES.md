@@ -55,6 +55,12 @@ Status key: **[verified]** = tested on my unit (own client or captured from Ulan
 - The stock app also starts the ZIP with an explicit `Images/` directory entry; we keep it (not proven necessary).
 - Our own PNGs (plain `Images/sigma.png` names or uuid names) display fine; only the container mattered.
 
+## State-aware buttons (built 2026-11-14, offline-verified only)
+- `Button::shown(active)` lays `alt` over the normal look; `layout::Live.active[idx]` says which buttons are "on". Sources: `toggle`
+  (service `TOGGLES`, flipped when the tap action fires), `output_muted` / `mic_muted` (`audio.rs`, Core Audio via the `windows` crate,
+  polled ~3x/s only for pages that use them). A change redraws the cell with a 0x000D update (deferred while a rim shows / key is down).
+- Added dependency: `windows` 0.62 (COM wrappers; windows-sys has none). `deckd audio` is a read-only check.
+
 ## Faces: live clock / stats / GIF (built 2026-11-14, offline-verified only)
 - `layout::Live{now, stats, tick_ms}` is what changes between redraws; `render_icon` draws live clock/stats and picks the GIF frame.
   The service re-sends a cell as a 0x000D partial update (no rim, button not held) when its `refresh_ms` is up or its GIF frame changes;

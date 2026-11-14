@@ -3,7 +3,7 @@
 
 use crate::{
     actions,
-    config::{Action, Config, DOUBLE_MS, REPEAT_DELAY_MS, REPEAT_MAX_SECS},
+    config::{Action, Config, StateSource, DOUBLE_MS, REPEAT_DELAY_MS, REPEAT_MAX_SECS},
     layout,
     protocol::{self, cmd, Event, HEARTBEAT_EVERY, PACKET},
 };
@@ -132,8 +132,64 @@ impl WideFilter {
     }
 }
 
-fn make_live(sampler: &crate::sysstats::Sampler, anim_start: Instant) -> layout::Live {
-    layout::Live { now: chrono::Local::now(), stats: sampler.stats(), tick_ms: anim_start.elapsed().as_millis() as u64 }
+fn make_live(sampler: &crate::sysstats::Sampler, anim_start: Instant, active: [bool; 14]) -> layout::Live {
+    layout::Live { now: chrono::Local::now(), stats: sampler.stats(), tick_ms: anim_start.elapsed().as_millis() as u64, active }
+}
+
+/// Buttons (page, index) whose `toggle` state is currently "on".
+static TOGGLES: Mutex<Vec<(u8, u8)>> = Mutex::new(Vec::new());
+
+fn flip_toggle(page: u8, index: u8) {
+    let mut t = TOGGLES.lock().unwrap_or_else(|e| e.into_inner());
+    match t.iter().position(|&k| k == (page, index)) {
+        Some(p) => {
+            t.remove(p);
+        }
+        None => t.push((page, index)),
+    }
+}
+
+/// Real system state polled for state-aware buttons (speaker / microphone mute).
+struct SysState {
+    out_muted: bool,
+    mic_muted: bool,
+    polled: Instant,
+}
+
+impl SysState {
+    fn new() -> SysState {
+        SysState { out_muted: false, mic_muted: false, polled: Instant::now() - Duration::from_secs(5) }
+    }
+
+    /// Poll the audio devices (about 3 times a second), but only when a button on this page follows them.
+    fn poll(&mut self, cfg: &Config, page: u8) {
+        if self.polled.elapsed() < Duration::from_millis(300) {
+            return;
+        }
+        let uses = |s: StateSource| (0..14u8).any(|i| cfg.button_for_index(page, i).and_then(|b| b.state_source()) == Some(s));
+        if uses(StateSource::OutputMuted) {
+            self.out_muted = crate::audio::muted(crate::audio::Kind::Output).unwrap_or(self.out_muted);
+        }
+        if uses(StateSource::MicMuted) {
+            self.mic_muted = crate::audio::muted(crate::audio::Kind::Mic).unwrap_or(self.mic_muted);
+        }
+        self.polled = Instant::now();
+    }
+}
+
+/// Which buttons on `page` show their alternate look right now.
+fn compute_active(cfg: &Config, page: u8, sys: &SysState) -> [bool; 14] {
+    let toggles = TOGGLES.lock().unwrap_or_else(|e| e.into_inner());
+    let mut a = [false; 14];
+    for (i, slot) in a.iter_mut().enumerate() {
+        *slot = match cfg.button_for_index(page, i as u8).and_then(|b| b.state_source()) {
+            Some(StateSource::Toggle) => toggles.contains(&(page, i as u8)),
+            Some(StateSource::OutputMuted) => sys.out_muted,
+            Some(StateSource::MicMuted) => sys.mic_muted,
+            None => false,
+        };
+    }
+    a
 }
 
 /// Runs an action. Returns the new page when it was a page switch.
@@ -216,6 +272,9 @@ fn fire(which: Fire, index: u8, page: u8, cfg: &Config, ctx: &Ctx, glow: &mut Gl
     match action {
         Some(a) => {
             ctx.log(format!("button {index} {gesture} detected -> {a:?}"));
+            if matches!(which, Fire::Single) && cfg.button_for_index(page, index).and_then(|b| b.state_source()) == Some(StateSource::Toggle) {
+                flip_toggle(page, index); // the alternate look follows the tap
+            }
             glow.push((index, match which {
                 Fire::Single => Glow::Tap,
                 Fire::Double => Glow::Double,
@@ -248,9 +307,12 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
         sampler.sample();
         let anim_start = Instant::now();
         let mut last_sample = Instant::now();
-        let mut live = make_live(&sampler, anim_start);
+        let mut sys = SysState::new();
+        sys.poll(cfg, page);
+        let mut live = make_live(&sampler, anim_start, compute_active(cfg, page, &sys));
         upload_layout(&dev, cfg, page, ctx, &live)?;
-        // live faces / GIFs: when each cell's picture was last (re)sent
+        // live faces / GIFs: when each cell's picture was last (re)sent; and which look (normal / alternate) it was drawn with
+        let mut last_active = live.active;
         let mut last_draw = [Instant::now(); 14];
         let mut last_frame: [Option<usize>; 14] = [None; 14];
         let mut last_live = Instant::now();
@@ -268,7 +330,8 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                 last_sample = Instant::now();
                 sampler.sample();
             }
-            live = make_live(&sampler, anim_start);
+            sys.poll(cfg, page);
+            live = make_live(&sampler, anim_start, compute_active(cfg, page, &sys));
             if let Some(p) = switch.take() {
                 if p != page {
                     page = p;
@@ -276,9 +339,13 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                     glow_until = [None; 14]; // the full upload below redraws every tile
                     glow_q.clear();
                     ctx.with(|s| s.page = page);
+                    sys.polled = Instant::now() - Duration::from_secs(5); // the new page may follow other devices: poll now
+                    sys.poll(cfg, page);
+                    live.active = compute_active(cfg, page, &sys);
                     upload_layout(&dev, cfg, page, ctx, &live)?;
                     last_draw = [Instant::now(); 14];
                     last_frame = [None; 14];
+                    last_active = live.active;
                 }
             }
             // the firmware's own stats readout needs fresh numbers every second; otherwise the 5 s heartbeat is enough
@@ -299,14 +366,16 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                     }
                     // live faces redraw on their refresh interval; a GIF whenever its frame changes
                     let frame = layout::gif_frame_index(b, cfg, i == 13, live.tick_ms);
-                    let due = if b.face.is_live() {
-                        last_draw[i].elapsed() >= Duration::from_millis(b.refresh_ms as u64)
-                    } else {
-                        frame.is_some() && frame != last_frame[i]
-                    };
+                    let due = live.active[i] != last_active[i]
+                        || if b.face.is_live() {
+                            last_draw[i].elapsed() >= Duration::from_millis(b.refresh_ms as u64)
+                        } else {
+                            frame.is_some() && frame != last_frame[i]
+                        };
                     if due {
                         last_draw[i] = Instant::now();
                         last_frame[i] = frame;
+                        last_active[i] = live.active[i];
                         if let Err(e) = send_cell(&dev, cfg, page, i, None, &live) {
                             ctx.log(format!("live redraw failed on button {i}: {e}"));
                         }
@@ -330,9 +399,13 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                             glow_until = [None; 14];
                             glow_q.clear();
                             protocol::send(&dev, cmd::BRIGHTNESS, cfg.brightness.min(100).to_string().as_bytes())?;
+                            sys.polled = Instant::now() - Duration::from_secs(5);
+                            sys.poll(cfg, page);
+                            live.active = compute_active(cfg, page, &sys);
                             upload_layout(&dev, cfg, page, ctx, &live)?;
                             last_draw = [Instant::now(); 14];
                             last_frame = [None; 14];
+                            last_active = live.active;
                         }
                         Err(e) => {
                             ctx.log(format!("config not reloaded (keeping the old one): {e}"));
@@ -390,6 +463,8 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                     }
                 }
             }
+            // a tap may just have flipped a toggle: draw the rim on the new look, not the old one
+            live.active = compute_active(cfg, page, &sys);
             // glow feedback: start requested rims, then restore tiles whose rim time is up
             let requests: Vec<(u8, Glow)> = glow_q.drain(..).collect();
             for (idx, g) in requests {
@@ -428,6 +503,7 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                     glow_until[i] = None;
                     last_draw[i] = Instant::now();
                     last_frame[i] = None;
+                    last_active[i] = live.active[i];
                     if let Err(e) = send_cell(&dev, cfg, page, i, None, &live) {
                         ctx.log(format!("glow restore failed: {e}"));
                     }
@@ -495,6 +571,7 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                         upload_layout(&dev, cfg, page, ctx, &live)?;
                         last_draw = [Instant::now(); 14];
                         last_frame = [None; 14];
+                        last_active = live.active;
                     }
                     _ => {}
                 },

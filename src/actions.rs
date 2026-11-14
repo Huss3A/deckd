@@ -81,6 +81,7 @@ fn parse_hotkey(keys: &str) -> Result<(Vec<u16>, u16), String> {
 pub fn validate(action: &Action) -> Result<(), String> {
     match action {
         Action::Hotkey { keys } => parse_hotkey(keys).map(|_| ()),
+        Action::Media { key } if key == "mic_mute" => Ok(()),
         Action::Media { key } => media_vk(key).map(|_| ()).ok_or(format!("unknown media key {key:?}")),
         Action::Run { command, .. } if command.trim().is_empty() => Err("run action has an empty command".into()),
         Action::Open { target } if target.trim().is_empty() => Err("open action has an empty target".into()),
@@ -135,6 +136,10 @@ pub fn execute(action: &Action) -> Result<(), String> {
             seq.push(key_event(main, true));
             seq.extend(mods.iter().rev().map(|&m| key_event(m, true)));
             press(&seq);
+        }
+        // not a real media key: flips the default microphone's mute switch directly (works in every app)
+        Action::Media { key } if key == "mic_mute" => {
+            crate::audio::toggle(crate::audio::Kind::Mic)?;
         }
         Action::Media { key } => {
             let vk = media_vk(key).ok_or(format!("unknown media key {key:?}"))?;

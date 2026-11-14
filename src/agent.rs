@@ -34,7 +34,7 @@ struct Args {
     flags: Vec<(String, String)>,
 }
 
-const BOOL_FLAGS: &[&str] = &["json", "execute", "dry-run", "split", "clear-holds"];
+const BOOL_FLAGS: &[&str] = &["json", "execute", "dry-run", "split", "clear-holds", "alt"];
 
 fn parse_args(raw: &[String]) -> Result<Args, CliError> {
     let (mut pos, mut flags) = (Vec::new(), Vec::new());
@@ -197,6 +197,26 @@ pub fn run(cmd: &str, raw: &[String]) -> Result<(), CliError> {
                     _ => return Err(usage("--keep-clock must be true or false")),
                 };
             }
+            // state-aware look: --state toggle|output_muted|mic_muted|none, and --alt-label/--alt-color/--alt-glyph/--alt-glyph-color/--alt-icon
+            if let Some(v) = a.get("state") {
+                use crate::config::StateSource as S;
+                b.state = match v {
+                    "toggle" => Some(S::Toggle),
+                    "output_muted" => Some(S::OutputMuted),
+                    "mic_muted" => Some(S::MicMuted),
+                    "none" | "" => None,
+                    _ => return Err(usage("--state must be toggle, output_muted, mic_muted or none")),
+                };
+            }
+            if ["alt-label", "alt-color", "alt-glyph", "alt-glyph-color", "alt-icon"].iter().any(|k| a.get(k).is_some()) {
+                let mut alt = b.alt.take().unwrap_or_default();
+                if let Some(v) = a.get("alt-label") { alt.label = opt(v); }
+                if let Some(v) = a.get("alt-color") { alt.color = opt(v); }
+                if let Some(v) = a.get("alt-glyph") { alt.glyph = opt(v); }
+                if let Some(v) = a.get("alt-glyph-color") { alt.glyph_color = opt(v); }
+                if let Some(v) = a.get("alt-icon") { alt.icon = opt(v); }
+                b.alt = (!alt.is_empty()).then_some(alt);
+            }
             if let Some(ms) = a.get("refresh-ms") {
                 b.refresh_ms = ms.parse().map_err(|_| usage("--refresh-ms must be a number 200-60000"))?;
             }
@@ -313,7 +333,11 @@ pub fn run(cmd: &str, raw: &[String]) -> Result<(), CliError> {
             for page in 1..=cfg.page_count() {
                 let pdir = dir.join(format!("page{page}"));
                 std::fs::create_dir_all(&pdir).map_err(|e| internal(e.to_string()))?;
-                let zip = layout::build_zip_live(&cfg, page, &layout::Live::demo()).map_err(invalid)?; // demo stats, current time
+                let mut live = layout::Live::demo(); // demo stats, current time
+                if a.has("alt") {
+                    live.active = [true; 14]; // `preview --alt` renders every button's alternate look
+                }
+                let zip = layout::build_zip_live(&cfg, page, &live).map_err(invalid)?;
                 let mut arch = zip::ZipArchive::new(std::io::Cursor::new(zip)).map_err(|e| internal(e.to_string()))?;
                 for i in 0..arch.len() {
                     let mut f = arch.by_index(i).map_err(|e| internal(e.to_string()))?;
@@ -422,6 +446,8 @@ fn schema() -> Value {
                     "glyph": {"type": "string", "description": "symbol drawn large in the middle"},
                     "glyph_color": color,
                     "face": {"enum": ["image", "live_clock", "live_stats", "clock", "stats"], "description": "what the button shows; clock/stats = the firmware's own display, wide slot 3,2 only; an icon ending in .gif animates"},
+                    "state": {"enum": ["toggle", "output_muted", "mic_muted"], "description": "what switches the button to its alt look: a tap toggle, or the real speaker / microphone mute state"},
+                    "alt": {"type": "object", "description": "look shown while the state is on; fields override the normal look", "properties": {"label": {"type": "string"}, "color": {"type": "string"}, "glyph": {"type": "string"}, "glyph_color": {"type": "string"}, "icon": {"type": "string"}}},
                     "refresh_ms": {"type": "integer", "minimum": 200, "maximum": 60000, "description": "live faces: redraw interval"},
                     "clock_format": {"type": "string", "description": "live_clock: strftime format, e.g. %H:%M or %H:%M:%S"},
                     "stats_style": {"enum": ["bars", "line", "text"], "description": "live_stats look"},

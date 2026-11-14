@@ -15,6 +15,7 @@
 
 mod actions;
 mod agent;
+mod audio;
 mod config;
 mod gui;
 mod layout;
@@ -159,6 +160,16 @@ fn main() {
             }
             Err("no image in the update".into())
         }),
+        // Read-only check of the audio state that state-aware buttons follow (does not change anything).
+        Some("audio") => {
+            for (name, kind) in [("speaker", audio::Kind::Output), ("microphone", audio::Kind::Mic)] {
+                match audio::muted(kind) {
+                    Ok(m) => println!("{name}: {}", if m { "MUTED" } else { "open" }),
+                    Err(e) => println!("{name}: {e}"),
+                }
+            }
+            Ok(())
+        }
         Some("serve") => {
             let ctx = service::Ctx::new(true, Arc::new(|| {}));
             service::run(config_path(1), ctx);

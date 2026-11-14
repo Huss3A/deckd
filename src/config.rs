@@ -211,6 +211,13 @@ pub struct Button {
     pub glyph_color: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action: Option<Action>,
+    /// What decides when the alternate look (`alt`) is shown: `toggle` (flips on every tap), `output_muted` (the default speaker is
+    /// muted) or `mic_muted` (the default microphone is muted). With `alt` set and no `state`, `toggle` is assumed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<StateSource>,
+    /// The look the button switches to while its state is "on"; any field left out keeps the normal look.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alt: Option<Alt>,
     /// Old name for `face = "clock"`; read from old config files and migrated on load, never written back.
     #[serde(default, skip_serializing)]
     pub keep_clock: bool,
@@ -233,6 +240,39 @@ pub struct Button {
     /// Rim color for this button's double tap (overrides `[feedback] double`), "#rrggbb".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rim_double: Option<String>,
+}
+
+/// Where a state-aware button gets its on/off state from.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StateSource {
+    /// Flips every time the button's tap action fires (deckd's own memory; resets when deckd restarts).
+    Toggle,
+    /// Real state: the default playback device is muted (follows the `mute` media key and anything else that mutes it).
+    OutputMuted,
+    /// Real state: the default microphone is muted (pair it with the `mic_mute` media key).
+    MicMuted,
+}
+
+/// The alternate look of a state-aware button (shown while its state is "on").
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+pub struct Alt {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub glyph: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub glyph_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+}
+
+impl Alt {
+    pub fn is_empty(&self) -> bool {
+        *self == Alt::default()
+    }
 }
 
 /// What a button shows.
@@ -412,7 +452,7 @@ impl Default for Config {
 
 impl Default for Button {
     fn default() -> Self {
-        Button { page: 1, pos: String::new(), double: None, holds: Vec::new(), hold: None, hold_ms: DEFAULT_HOLD_MS, hold_long: None, hold_long_ms: DEFAULT_LONG_MS, repeat: None, repeat_ms: DEFAULT_REPEAT_MS, label: None, color: None, icon: None, glyph: None, glyph_color: None, action: None, keep_clock: false, face: Face::Image, refresh_ms: DEFAULT_REFRESH_MS, clock_format: None, stats_style: None, rim_tap: None, rim_double: None }
+        Button { page: 1, pos: String::new(), double: None, holds: Vec::new(), hold: None, hold_ms: DEFAULT_HOLD_MS, hold_long: None, hold_long_ms: DEFAULT_LONG_MS, repeat: None, repeat_ms: DEFAULT_REPEAT_MS, label: None, color: None, icon: None, glyph: None, glyph_color: None, action: None, state: None, alt: None, keep_clock: false, face: Face::Image, refresh_ms: DEFAULT_REFRESH_MS, clock_format: None, stats_style: None, rim_tap: None, rim_double: None }
     }
 }
 
@@ -424,6 +464,32 @@ impl Button {
             Some(t) => self.holds.iter().filter(|h| h.ms == t).collect(),
             None => Vec::new(),
         }
+    }
+
+    /// Where the alternate look's on/off state comes from (None = this button has no state).
+    pub fn state_source(&self) -> Option<StateSource> {
+        self.state.or(self.alt.as_ref().map(|_| StateSource::Toggle))
+    }
+
+    /// The button as it should be drawn: with `active`, the alternate look is laid over the normal one. If the alternate look
+    /// has its own picture (icon, or symbol) that replaces the normal picture entirely.
+    pub fn shown(&self, active: bool) -> Button {
+        let mut b = self.clone();
+        let Some(a) = self.alt.as_ref().filter(|_| active) else { return b };
+        if let Some(v) = &a.label {
+            b.label = Some(v.clone());
+        }
+        if let Some(v) = &a.color {
+            b.color = Some(v.clone());
+        }
+        if let Some(v) = &a.glyph_color {
+            b.glyph_color = Some(v.clone());
+        }
+        if a.icon.is_some() || a.glyph.is_some() {
+            b.icon = a.icon.clone();
+            b.glyph = a.glyph.clone();
+        }
+        b
     }
 
     /// Validates the display settings (shared by the loader, the window and the agent CLI).
@@ -438,6 +504,11 @@ impl Button {
         if let Some(f) = &self.clock_format {
             if chrono::format::StrftimeItems::new(f).any(|i| matches!(i, chrono::format::Item::Error)) || f.is_empty() {
                 return Err(format!("{}: clock_format {f:?} is not a valid time format (try \"%H:%M\" or \"%H:%M:%S\")", at()));
+            }
+        }
+        if let Some(a) = &self.alt {
+            for c in [&a.color, &a.glyph_color].into_iter().flatten() {
+                parse_hex(c).ok_or_else(|| format!("{}: alt color {c:?} must be #rrggbb", at()))?;
             }
         }
         if let Some(s) = &self.stats_style {

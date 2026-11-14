@@ -1,7 +1,7 @@
 //! The deckd window: a clickable copy of the deck, an editor for the selected button, and live status.
 //! Edits are saved to deck.toml (debounced); the service thread notices the file change and re-uploads.
 
-use crate::config::{Action, Button, Config, Face, COLS, ROWS, SAMPLE};
+use crate::config::{Action, Alt, Button, Config, Face, StateSource, COLS, ROWS, SAMPLE};
 use crate::{actions, layout, service};
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 use std::collections::HashMap;
@@ -583,9 +583,86 @@ impl App {
             });
         });
 
+        // ---- alternate look (state) ----
+        ui.add_space(6.0);
+        egui::CollapsingHeader::new("Alternate look (icon changes with state)").default_open(b.alt.is_some() || b.state.is_some()).show(ui, |ui| {
+            ui.weak("For toggles like mute: while the state is on, the button shows this look instead of the normal one.");
+            ui.horizontal(|ui| {
+                ui.label("State from:");
+                let name = |s: Option<StateSource>| match s {
+                    None | Some(StateSource::Toggle) => "Tap toggles it",
+                    Some(StateSource::OutputMuted) => "Speaker is muted (real state)",
+                    Some(StateSource::MicMuted) => "Microphone is muted (real state)",
+                };
+                egui::ComboBox::from_id_salt("state").selected_text(name(b.state)).width(230.0).show_ui(ui, |ui| {
+                    for s in [StateSource::Toggle, StateSource::OutputMuted, StateSource::MicMuted] {
+                        ui.selectable_value(&mut b.state, Some(s), name(Some(s)));
+                    }
+                });
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Presets:");
+                if ui.small_button("Mic mute").on_hover_text("tap flips the microphone mute; shows green when open, red when muted").clicked() {
+                    b.action = Some(Action::Media { key: "mic_mute".into() });
+                    b.state = Some(StateSource::MicMuted);
+                    b.label = Some("Mic ON".into());
+                    b.color = Some("#1f6f3a".into());
+                    b.alt = Some(Alt { label: Some("Mic MUTED".into()), color: Some("#b62324".into()), ..Alt::default() });
+                }
+                if ui.small_button("Speaker mute").on_hover_text("tap flips the speaker mute; shows green when sound is on, red when muted").clicked() {
+                    b.action = Some(Action::Media { key: "mute".into() });
+                    b.state = Some(StateSource::OutputMuted);
+                    b.label = Some("Sound ON".into());
+                    b.color = Some("#1f6f3a".into());
+                    b.alt = Some(Alt { label: Some("Sound MUTED".into()), color: Some("#b62324".into()), ..Alt::default() });
+                }
+            });
+            ui.add_space(4.0);
+            let mut a = b.alt.clone().unwrap_or_default();
+            let w = (ui.available_width() - 16.0).max(60.0);
+            let mut label = a.label.clone().unwrap_or_default();
+            ui.add(egui::TextEdit::singleline(&mut label).desired_width(w).hint_text("Label while on (empty = keep)"));
+            a.label = (!label.is_empty()).then_some(label);
+            ui.horizontal(|ui| {
+                let mut rgb = a.color.as_deref().and_then(parse_rgb).or_else(|| b.color.as_deref().and_then(parse_rgb)).unwrap_or([0x20, 0x20, 0x20]);
+                if egui::color_picker::color_edit_button_srgb(ui, &mut rgb).changed() {
+                    a.color = Some(hex(rgb));
+                }
+                ui.label("background");
+                if a.color.is_some() && ui.small_button("reset").clicked() {
+                    a.color = None;
+                }
+                ui.add_space(12.0);
+                let mut gc = a.glyph_color.as_deref().and_then(parse_rgb).or_else(|| b.glyph_color.as_deref().and_then(parse_rgb)).unwrap_or([255, 255, 255]);
+                if egui::color_picker::color_edit_button_srgb(ui, &mut gc).changed() {
+                    a.glyph_color = Some(hex(gc));
+                }
+                ui.label("symbol");
+            });
+            ui.horizontal(|ui| {
+                let mut glyph = a.glyph.clone().unwrap_or_default();
+                ui.add(egui::TextEdit::singleline(&mut glyph).desired_width(70.0).hint_text("symbol"));
+                a.glyph = (!glyph.is_empty()).then_some(glyph);
+                let mut icon = a.icon.clone().unwrap_or_default();
+                let w = (ui.available_width() - 110.0).max(60.0);
+                ui.add(egui::TextEdit::singleline(&mut icon).desired_width(w).hint_text("or an image file"));
+                if ui.button("Browse…").clicked() {
+                    if let Some(p) = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg", "bmp", "gif", "ico"]).pick_file() {
+                        icon = p.display().to_string();
+                    }
+                }
+                a.icon = (!icon.is_empty()).then_some(icon);
+            });
+            if b.alt.is_some() && ui.small_button("Remove the alternate look").clicked() {
+                a = Alt::default();
+                b.state = None;
+            }
+            b.alt = (!a.is_empty()).then_some(a);
+        });
+
         // ---- actions ----
         ui.add_space(10.0);
-        ui.label(egui::RichText::new("WoEN PRESSED").small().weak());
+        ui.label(egui::RichText::new("WHEN PRESSED").small().weak());
         egui::Frame::group(ui.style()).show(ui, |ui| {
             ui.set_width(ui.available_width());
             self.action_editor(ui, "press", &mut b.action);
@@ -670,7 +747,7 @@ impl App {
         }
 
         if before != snapshot(&b) {
-            let empty = b.label.is_none() && b.color.is_none() && b.glyph.is_none() && b.icon.is_none() && b.face.is_image() && b.action.is_none() && b.double.is_none() && b.holds.is_empty() && b.repeat.is_none();
+            let empty = b.label.is_none() && b.color.is_none() && b.glyph.is_none() && b.icon.is_none() && b.face.is_image() && b.alt.is_none() && b.action.is_none() && b.double.is_none() && b.holds.is_empty() && b.repeat.is_none();
             if empty {
                 self.cfg.clear_button(page, col, row);
             } else {

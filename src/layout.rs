@@ -17,6 +17,8 @@ pub struct Live {
     pub stats: Stats,
     /// Milliseconds on the animation clock (decides which GIF frame is shown).
     pub tick_ms: u64,
+    /// Per button index: is its state "on" (the alternate look is shown)?
+    pub active: [bool; 14],
 }
 
 impl Live {
@@ -28,12 +30,13 @@ impl Live {
             now: chrono::Local::now(),
             stats: Stats { cpu: *hist_cpu.last().unwrap_or(&0.0), mem: *hist_mem.last().unwrap_or(&0.0), hist_cpu, hist_mem },
             tick_ms: 0,
+            active: [false; 14],
         }
     }
 
     /// A snapshot for offline rendering (previews, full layouts built outside the service).
     pub fn snapshot() -> Live {
-        Live { now: chrono::Local::now(), stats: Stats::default(), tick_ms: 0 }
+        Live { now: chrono::Local::now(), stats: Stats::default(), tick_ms: 0, active: [false; 14] }
     }
 }
 
@@ -369,7 +372,7 @@ fn render_icon(b: Option<&Button>, cfg: &Config, font: Option<&FontVec>, w: u32,
 
 /// The glyph font, read once and cached (live faces redraw every second or so).
 fn load_font(cfg: &Config) -> Result<Option<Arc<FontVec>>, String> {
-    if !cfg.buttons.iter().any(|b| b.glyph.is_some() || b.face.is_live()) {
+    if !cfg.buttons.iter().any(|b| b.glyph.is_some() || b.face.is_live() || b.alt.as_ref().is_some_and(|a| a.glyph.is_some())) {
         return Ok(None);
     }
     static CACHE: Mutex<Option<(String, Arc<FontVec>)>> = Mutex::new(None);
@@ -415,7 +418,8 @@ fn draw_rim(img: &mut RgbaImage, rgb: [u8; 3], width: u32, radius: u32) {
 /// so it has the same hashed filename).
 pub fn cell_zip(cfg: &Config, page: u8, col: u8, row: u8, rim: Option<([u8; 3], u32, u32)>, live: &Live) -> Result<Vec<u8>, String> {
     let glyph_font = load_font(cfg)?;
-    let b = cfg.button_at(page, col, row);
+    let shown = cfg.button_at(page, col, row).map(|b| b.shown(live.active[(row * COLS + col) as usize]));
+    let b = shown.as_ref();
     let mut png = render_icon(b, cfg, glyph_font.as_deref(), cell_width(col, row), live)?;
     if let Some((rgb, width, radius)) = rim {
         let mut img = image::load_from_memory(&png).map_err(|e| e.to_string())?.to_rgba8();
@@ -467,7 +471,8 @@ pub fn build_zip_live(cfg: &Config, page: u8, live: &Live) -> Result<Vec<u8>, St
                 continue; // covered by the wide clock slot
             }
             let key = format!("{col}_{row}");
-            let b = cfg.button_at(page, col, row);
+            let shown = cfg.button_at(page, col, row).map(|b| b.shown(live.active[(row * COLS + col) as usize]));
+            let b = shown.as_ref();
             if row == 2 && col == 3 && b.is_none_or(|b| b.face.is_firmware()) {
                 // no button on the wide slot, or one that hands it to the firmware: clock (mode 1) or stats (mode 0), no picture
                 let mode = if b.is_some_and(|b| b.face == Face::Stats) { 0 } else { 1 };
