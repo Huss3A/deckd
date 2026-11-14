@@ -132,7 +132,7 @@ const WIDE_GAP: Duration = Duration::from_millis(700);
 
 impl WideFilter {
     /// Normal buttons: only state 01 counts. Index 13: collapse bursts. Returns whether the event should be handled.
-    fn accept(&mut self, ctx: &Ctx, index: u8, state: u8, pressed: bool) -> bool {
+    fn accept(&mut self, index: u8, state: u8, pressed: bool) -> bool {
         if index != 13 {
             return state == 0x01;
         }
@@ -155,7 +155,6 @@ impl WideFilter {
         } else {
             false
         };
-        ctx.log(format!("wide slot: state {state:#04x} {} -> {}", if pressed { "down" } else { "up" }, if ok { "used" } else { "ignored (part of a burst)" }));
         ok
     }
 }
@@ -411,7 +410,7 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
             match dev.read(&mut buf).map_err(|e| format!("read error: {e}"))? {
                 0 => std::thread::sleep(Duration::from_millis(10)),
                 n => match protocol::parse(&buf[..n]) {
-                    Some(Event::Button { index, state, pressed }) if (index as usize) < 14 && wide.accept(ctx, index, state, pressed) => {
+                    Some(Event::Button { index, state, pressed }) if (index as usize) < 14 && wide.accept(index, state, pressed) => {
                         let i = index as usize;
                         let b = cfg.button_for_index(page, index);
                         let (has_double, has_hold) = (b.is_some_and(|b| b.double.is_some()), b.is_some_and(|b| !b.holds.is_empty()));
