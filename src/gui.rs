@@ -34,11 +34,17 @@ enum Kind {
     Media,
     Page,
     Print,
+    Text,
+    Delay,
+    Macro,
 }
 
 fn kind_of(a: &Option<Action>) -> Kind {
     match a {
         None => Kind::None,
+        Some(Action::Text { .. }) => Kind::Text,
+        Some(Action::Delay { .. }) => Kind::Delay,
+        Some(Action::Macro { .. }) => Kind::Macro,
         Some(Action::Page { .. }) => Kind::Page,
         Some(Action::Print { .. }) => Kind::Print,
         Some(Action::Run { .. }) => Kind::Run,
@@ -401,17 +407,28 @@ impl App {
 
     /// Editor for one action slot (press / double tap / hold). `slot` identifies it for hotkey recording.
     fn action_editor(&mut self, ui: &mut egui::Ui, slot: &str, action: &mut Option<Action>) {
+        self.action_editor_ex(ui, slot, action, false);
+    }
+
+    /// `step`: editing one step of a macro (no page switch, no nested macro, a Wait is allowed).
+    fn action_editor_ex(&mut self, ui: &mut egui::Ui, slot: &str, action: &mut Option<Action>, step: bool) {
         let bad = Color32::from_rgb(0xff, 0x7b, 0x72);
         let mut kind = kind_of(action);
         let old_kind = kind;
         ui.horizontal_wrapped(|ui| {
-            for (k, name) in [(Kind::None, "Nothing"), (Kind::Run, "Program"), (Kind::Open, "Open"), (Kind::Hotkey, "Hotkey"), (Kind::Media, "Media"), (Kind::Page, "Page"), (Kind::Print, "Print")] {
-                ui.selectable_value(&mut kind, k, name);
+            let kinds: &[(Kind, &str)] = if step {
+                &[(Kind::Hotkey, "Hotkey"), (Kind::Text, "Type text"), (Kind::Delay, "Wait"), (Kind::Run, "Program"), (Kind::Open, "Open"), (Kind::Media, "Media"), (Kind::Print, "Print")]
+            } else {
+                &[(Kind::None, "Nothing"), (Kind::Run, "Program"), (Kind::Open, "Open"), (Kind::Hotkey, "Hotkey"), (Kind::Media, "Media"), (Kind::Text, "Type text"), (Kind::Macro, "Macro"), (Kind::Page, "Page"), (Kind::Print, "Print")]
+            };
+            for (k, name) in kinds {
+                ui.selectable_value(&mut kind, *k, *name);
             }
         });
         if kind != old_kind {
             self.recording = None;
             self.test_msg = None;
+            let previous = action.take();
             *action = match kind {
                 Kind::None => None,
                 Kind::Run => Some(Action::Run { command: String::new(), args: vec![] }),
@@ -420,6 +437,10 @@ impl App {
                 Kind::Media => Some(Action::Media { key: "play_pause".into() }),
                 Kind::Page => Some(Action::Page { to: "next".into() }),
                 Kind::Print => Some(Action::Print { text: "hello".into() }),
+                Kind::Text => Some(Action::Text { text: String::new() }),
+                Kind::Delay => Some(Action::Delay { ms: 250 }),
+                // the action that was there becomes step 1 of the new macro
+                Kind::Macro => Some(Action::Macro { steps: previous.filter(|p| !matches!(p, Action::Page { .. } | Action::Macro { .. })).into_iter().collect() }),
             };
         }
         ui.add_space(4.0);
@@ -495,7 +516,9 @@ impl App {
                         self.recording = Some(slot.to_string());
                     }
                 });
-                ui.weak("Record captures the combo you press. The Windows key can't be recorded; type win+… instead.");
+                if !step {
+                    ui.weak("Record captures the combo you press. The Windows key can't be recorded; type win+… instead.");
+                }
             }
             Some(Action::Media { key }) => {
                 ui.horizontal_wrapped(|ui| {
@@ -530,11 +553,76 @@ impl App {
                 ui.add(egui::TextEdit::singleline(text).desired_width(w).hint_text("message for the log"));
                 ui.weak("Shows in the Log (bottom bar) when the gesture fires. Good for testing double tap / hold.");
             }
+            Some(Action::Delay { ms }) => {
+                ui.horizontal_wrapped(|ui| {
+                    ui.add(egui::DragValue::new(ms).range(10..=60000).suffix(" ms").speed(10));
+                    for v in [50u32, 100, 250, 500, 1000, 2000] {
+                        if ui.small_button(v.to_string()).clicked() {
+                            *ms = v;
+                        }
+                    }
+                });
+            }
+            Some(Action::Text { text }) => {
+                let w = room(ui, 16.0);
+                ui.add(egui::TextEdit::multiline(text).desired_rows(3).desired_width(w).hint_text("text to type"));
+                ui.weak(format!("{} characters, typed into whichever window has focus. A line break presses Enter.", text.chars().count()));
+            }
+            Some(Action::Macro { steps }) => {
+                ui.weak("Runs these steps one after the other. Add a Wait step to pause between two of them.");
+                let (mut remove, mut swap) = (None, None);
+                let count = steps.len();
+                for (n, s) in steps.iter_mut().enumerate() {
+                    egui::Frame::group(ui.style()).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            ui.strong(format!("Step {}", n + 1));
+                            if ui.add_enabled(n > 0, egui::Button::new("↑").small()).on_hover_text("Move up").clicked() {
+                                swap = Some((n, n - 1));
+                            }
+                            if ui.add_enabled(n + 1 < count, egui::Button::new("↓").small()).on_hover_text("Move down").clicked() {
+                                swap = Some((n, n + 1));
+                            }
+                            if ui.small_button("🗑").on_hover_text("Remove this step").clicked() {
+                                remove = Some(n);
+                            }
+                        });
+                        let mut act = Some(s.clone());
+                        self.action_editor_ex(ui, &format!("{slot}.s{n}"), &mut act, true);
+                        if let Some(a) = act {
+                            *s = a;
+                        }
+                    });
+                }
+                if let Some(n) = remove {
+                    steps.remove(n);
+                } else if let Some((a, b)) = swap {
+                    steps.swap(a, b);
+                }
+                ui.menu_button("+ Add step", |ui| {
+                    for (label, a) in [
+                        ("Hotkey", Action::Hotkey { keys: String::new() }),
+                        ("Type text", Action::Text { text: String::new() }),
+                        ("Wait", Action::Delay { ms: 250 }),
+                        ("Program", Action::Run { command: String::new(), args: vec![] }),
+                        ("Open", Action::Open { target: String::new() }),
+                        ("Media", Action::Media { key: "play_pause".into() }),
+                        ("Print", Action::Print { text: "step".into() }),
+                    ] {
+                        if ui.button(label).clicked() && steps.len() < crate::config::MACRO_MAX_STEPS {
+                            steps.push(a);
+                            ui.close();
+                        }
+                    }
+                });
+                let waits: u32 = steps.iter().map(|s| if let Action::Delay { ms } = s { *ms } else { 0 }).sum();
+                ui.weak(format!("{} step(s), {} ms of waiting plus a short gap between steps", steps.len(), waits));
+            }
             None => {
                 ui.weak("Nothing happens.");
             }
         }
-        if let Some(a) = action.clone() {
+        if let Some(a) = action.clone().filter(|_| !step) {
             ui.add_space(4.0);
             match actions::validate(&a) {
                 Err(e) => {
@@ -542,10 +630,21 @@ impl App {
                 }
                 Ok(()) if !matches!(a, Action::Page { .. }) => {
                     if ui.button("▶ Test now").on_hover_text("Runs this action on your PC right now").clicked() {
-                        self.test_msg = Some((slot.to_string(), match (&a, actions::execute(&a)) {
-                            (Action::Print { text }, _) => (true, format!("Would log: {text}")),
-                            (_, Ok(())) => (true, "Ran.".to_string()),
-                            (_, Err(e)) => (false, e),
+                        let slow = matches!(a, Action::Macro { .. } | Action::Delay { .. } | Action::Text { .. });
+                        self.test_msg = Some((slot.to_string(), if slow {
+                            // typing / waiting must not freeze the window, and the text must land in the other window
+                            let a2 = a.clone();
+                            std::thread::spawn(move || {
+                                std::thread::sleep(Duration::from_secs(3));
+                                let _ = actions::execute(&a2);
+                            });
+                            (true, "Starts in 3 seconds: click into the window where it should happen.".to_string())
+                        } else {
+                            match (&a, actions::execute(&a)) {
+                                (Action::Print { text }, _) => (true, format!("Would log: {text}")),
+                                (_, Ok(())) => (true, "Ran.".to_string()),
+                                (_, Err(e)) => (false, e),
+                            }
                         }));
                     }
                 }

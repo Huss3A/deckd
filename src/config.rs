@@ -363,7 +363,16 @@ pub enum Action {
     Page { to: String },
     /// Write a message to the deckd log (handy for testing double tap / hold).
     Print { text: String },
+    /// Wait, in milliseconds (10-60000). Only useful as a step in a macro.
+    Delay { ms: u32 },
+    /// Type a text into the focused window (as if typed on a keyboard; line breaks press Enter).
+    Text { text: String },
+    /// Several actions run in order on their own thread (no pages or nested macros inside).
+    Macro { steps: Vec<Action> },
 }
+
+pub const MACRO_MAX_STEPS: usize = 50;
+pub const TEXT_MAX_CHARS: usize = 1000;
 
 fn default_brightness() -> u8 {
     86
@@ -419,6 +428,12 @@ impl Config {
             }
             if matches!(b.repeat, Some(Action::Page { .. })) || matches!(b.tap_hold, Some(Action::Page { .. })) {
                 return Err(format!("button {:?} (page {}): a page switch can't be used as a repeat action", b.pos, b.page));
+            }
+            if matches!(b.repeat, Some(Action::Macro { .. } | Action::Delay { .. })) || matches!(b.tap_hold, Some(Action::Macro { .. } | Action::Delay { .. })) {
+                return Err(format!("button {:?} (page {}): a macro or delay can't be used as a repeat action", b.pos, b.page));
+            }
+            for h in &b.holds {
+                crate::actions::validate(&h.action).map_err(|e| format!("button {:?} (page {}) hold step: {e}", b.pos, b.page))?;
             }
             if !(150..=1000).contains(&b.window_ms) {
                 return Err(format!("button {:?}: window_ms must be 150-1000", b.pos));

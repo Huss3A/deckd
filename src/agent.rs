@@ -34,7 +34,7 @@ struct Args {
     flags: Vec<(String, String)>,
 }
 
-const BOOL_FLAGS: &[&str] = &["json", "execute", "dry-run", "split", "clear-holds", "alt"];
+const BOOL_FLAGS: &[&str] = &["json", "execute", "dry-run", "split", "clear-holds", "alt", "append"];
 
 fn parse_args(raw: &[String]) -> Result<Args, CliError> {
     let (mut pos, mut flags) = (Vec::new(), Vec::new());
@@ -110,6 +110,9 @@ fn check(cfg: &Config) -> Result<usize, CliError> {
         if matches!(b.repeat, Some(Action::Page { .. })) || matches!(b.tap_hold, Some(Action::Page { .. })) {
             return Err(invalid(format!("button {:?} (page {}): a page switch can't be used as a repeat action", b.pos, b.page)));
         }
+        if matches!(b.repeat, Some(Action::Macro { .. } | Action::Delay { .. })) || matches!(b.tap_hold, Some(Action::Macro { .. } | Action::Delay { .. })) {
+            return Err(invalid(format!("button {:?} (page {}): a macro or delay can't be used as a repeat action", b.pos, b.page)));
+        }
         if !(150..=1000).contains(&b.window_ms) {
             return Err(invalid(format!("button {:?}: window_ms must be 150-1000", b.pos)));
         }
@@ -132,6 +135,9 @@ fn describe(a: &Action) -> String {
         Action::Open { target } => format!("open {target}"),
         Action::Hotkey { keys } => format!("hotkey {keys}"),
         Action::Media { key } => format!("media {key}"),
+        Action::Delay { ms } => format!("wait {ms} ms"),
+        Action::Text { text } => format!("type {text:?}"),
+        Action::Macro { steps } => format!("macro: {}", steps.iter().map(describe).collect::<Vec<_>>().join(" -> ")),
     }
 }
 
@@ -237,6 +243,28 @@ pub fn run(cmd: &str, raw: &[String]) -> Result<(), CliError> {
             if a.has("clear-holds") {
                 b.holds.clear();
             }
+            // --remove-step N (1-based) deletes one step of the macro in the slot chosen by --on (a macro left with
+            // one step becomes that plain action; with none, the slot is cleared).
+            if let Some(n) = a.get("remove-step") {
+                let n: usize = n.parse().map_err(|_| usage("--remove-step must be a step number, 1 and up"))?;
+                let slot = match a.get("on").unwrap_or("press") {
+                    "press" => &mut b.action,
+                    "double" => &mut b.double,
+                    "repeat" => &mut b.repeat,
+                    "tap_hold" | "tap-hold" => &mut b.tap_hold,
+                    other => return Err(usage(format!("--remove-step works on press|double|repeat|tap_hold, not {other:?}"))),
+                };
+                let Some(Action::Macro { steps }) = slot else { return Err(usage("that gesture is not a macro (use --append to build one)")) };
+                if n == 0 || n > steps.len() {
+                    return Err(usage(format!("the macro has {} step(s)", steps.len())));
+                }
+                steps.remove(n - 1);
+                *slot = match steps.len() {
+                    0 => None,
+                    1 => steps.pop(),
+                    _ => slot.take(),
+                };
+            }
             if let Some(t) = a.get("action-type") {
                 let need = |n: &str| a.get(n).map(str::to_string).ok_or_else(|| usage(format!("--action-type {t} needs --{n}")));
                 let new: Option<Action> = match t {
@@ -247,16 +275,38 @@ pub fn run(cmd: &str, raw: &[String]) -> Result<(), CliError> {
                     "open" => Some(Action::Open { target: need("target")? }),
                     "hotkey" => Some(Action::Hotkey { keys: need("keys")? }),
                     "media" => Some(Action::Media { key: need("key")? }),
-                    other => return Err(usage(format!("unknown --action-type {other:?}; use run|open|hotkey|media|page|print|none"))),
+                    "delay" => Some(Action::Delay { ms: need("ms")?.parse().map_err(|_| usage("--ms must be a number 10-60000"))? }),
+                    "text" => Some(Action::Text { text: need("text")? }),
+                    other => return Err(usage(format!("unknown --action-type {other:?}; use run|open|hotkey|media|page|print|delay|text|none"))),
+                };
+                // --append adds the action as the next step of a macro in that gesture (a plain action there becomes
+                // step 1 of a new macro). Without it the action replaces whatever was there.
+                let put = |slot: &mut Option<Action>| -> Result<(), CliError> {
+                    let Some(n) = new.clone().filter(|_| a.has("append")) else {
+                        *slot = new.clone();
+                        return Ok(());
+                    };
+                    if matches!(n, Action::Page { .. }) {
+                        return Err(usage("a page switch can't be a macro step"));
+                    }
+                    *slot = Some(match slot.take() {
+                        None => n,
+                        Some(Action::Macro { mut steps }) => {
+                            steps.push(n);
+                            Action::Macro { steps }
+                        }
+                        Some(old) => Action::Macro { steps: vec![old, n] },
+                    });
+                    Ok(())
                 };
                 // --on press (default) | double | repeat | hold chooses where the action goes.
                 // `hold` ADDS a step (--hold-ms, default 500; steps with the same duration chain into one macro,
                 // --split makes it a separate parallel macro); `--action-type none --on hold --hold-ms N` removes the steps at N.
                 match a.get("on").unwrap_or("press") {
-                    "press" => b.action = new,
-                    "double" => b.double = new,
-                    "repeat" => b.repeat = new,
-                    "tap_hold" | "tap-hold" => b.tap_hold = new,
+                    "press" => put(&mut b.action)?,
+                    "double" => put(&mut b.double)?,
+                    "repeat" => put(&mut b.repeat)?,
+                    "tap_hold" | "tap-hold" => put(&mut b.tap_hold)?,
                     "hold" => {
                         let ms: u16 = a.get("hold-ms").unwrap_or("500").parse().map_err(|_| usage("--hold-ms must be a number 100-10000"))?;
                         match new {
@@ -427,7 +477,10 @@ fn schema() -> Value {
         {"type": "object", "required": ["type", "keys"], "properties": {"type": {"const": "hotkey"}, "keys": {"type": "string", "examples": ["ctrl+shift+m", "win+shift+s"]}}},
         {"type": "object", "required": ["type", "key"], "properties": {"type": {"const": "media"}, "key": {"enum": ["vol_up", "vol_down", "mute", "play_pause", "next", "prev", "stop"]}}},
         {"type": "object", "required": ["type", "text"], "properties": {"type": {"const": "print"}, "text": {"type": "string", "description": "message written to the deckd log"}}},
-        {"type": "object", "required": ["type", "to"], "properties": {"type": {"const": "page"}, "to": {"type": "string", "description": "next, prev, home or a page number 1-9"}}}
+        {"type": "object", "required": ["type", "to"], "properties": {"type": {"const": "page"}, "to": {"type": "string", "description": "next, prev, home or a page number 1-9"}}},
+        {"type": "object", "required": ["type", "ms"], "properties": {"type": {"const": "delay"}, "ms": {"type": "integer", "minimum": 10, "maximum": 60000, "description": "wait; useful as a macro step"}}},
+        {"type": "object", "required": ["type", "text"], "properties": {"type": {"const": "text"}, "text": {"type": "string", "maxLength": 1000, "description": "typed into the focused window; line breaks press Enter"}}},
+        {"type": "object", "required": ["type", "steps"], "properties": {"type": {"const": "macro"}, "steps": {"type": "array", "minItems": 1, "maxItems": 50, "description": "run in order on their own thread; no page or macro steps; not allowed as repeat / tap_hold", "items": {"type": "object", "description": "any action except page and macro"}}}}
     ]});
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",

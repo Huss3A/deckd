@@ -90,7 +90,58 @@ pub fn validate(action: &Action) -> Result<(), String> {
             n if n.parse::<u8>().is_ok_and(|p| (1..=crate::config::MAX_PAGES).contains(&p)) => Ok(()),
             other => Err(format!("bad page target {other:?}: use next, prev, home or a page number 1-{}", crate::config::MAX_PAGES)),
         },
+        Action::Delay { ms } if !(10..=60_000).contains(ms) => Err(format!("delay {ms} ms must be 10-60000")),
+        Action::Text { text } if text.is_empty() => Err("text step is empty".into()),
+        Action::Text { text } if text.chars().count() > crate::config::TEXT_MAX_CHARS => {
+            Err(format!("text is longer than {} characters", crate::config::TEXT_MAX_CHARS))
+        }
+        Action::Macro { steps } => {
+            if steps.is_empty() {
+                return Err("a macro needs at least one step".into());
+            }
+            if steps.len() > crate::config::MACRO_MAX_STEPS {
+                return Err(format!("a macro can have at most {} steps", crate::config::MACRO_MAX_STEPS));
+            }
+            for (n, s) in steps.iter().enumerate() {
+                if matches!(s, Action::Macro { .. } | Action::Page { .. }) {
+                    return Err(format!("step {}: a macro can't contain a page switch or another macro", n + 1));
+                }
+                validate(s).map_err(|e| format!("step {}: {e}", n + 1))?;
+            }
+            Ok(())
+        }
         _ => Ok(()),
+    }
+}
+
+/// Type text into the focused window: Unicode key events (any character), Enter for line breaks, Tab for tabs.
+fn type_text(text: &str) {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::KEYEVENTF_UNICODE;
+    for ch in text.chars().filter(|&c| c != '\r') {
+        let mut seq = Vec::new();
+        match ch {
+            '\n' => {
+                seq.push(key_event(0x0D, false));
+                seq.push(key_event(0x0D, true));
+            }
+            '\t' => {
+                seq.push(key_event(0x09, false));
+                seq.push(key_event(0x09, true));
+            }
+            c => {
+                let mut units = [0u16; 2];
+                for &u in c.encode_utf16(&mut units).iter() {
+                    for up in [false, true] {
+                        seq.push(INPUT {
+                            r#type: INPUT_KEYBOARD,
+                            Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: 0, wScan: u, dwFlags: KEYEVENTF_UNICODE | if up { KEYEVENTF_KEYUP } else { 0 }, time: 0, dwExtraInfo: 0 } },
+                        });
+                    }
+                }
+            }
+        }
+        press(&seq);
+        std::thread::sleep(std::time::Duration::from_millis(4));
     }
 }
 
@@ -110,6 +161,29 @@ fn press(sequence: &[INPUT]) {
 }
 
 pub fn execute(action: &Action) -> Result<(), String> {
+    execute_logged(action, &|m| println!("{m}"))
+}
+
+/// Like `execute`, but messages (print steps) go to `log`. Delays and macros block this thread until they finish,
+/// so callers run them off the main loop.
+pub fn execute_logged(action: &Action, log: &dyn Fn(String)) -> Result<(), String> {
+    match action {
+        Action::Delay { ms } => std::thread::sleep(std::time::Duration::from_millis(*ms as u64)),
+        Action::Text { text } => type_text(text),
+        Action::Macro { steps } => {
+            for (n, s) in steps.iter().enumerate() {
+                if n > 0 && !matches!(s, Action::Delay { .. }) && !matches!(steps[n - 1], Action::Delay { .. }) {
+                    std::thread::sleep(std::time::Duration::from_millis(40)); // let the app see each step
+                }
+                execute_logged(s, log).map_err(|e| format!("step {}: {e}", n + 1))?;
+            }
+        }
+        _ => return execute_single(action, log),
+    }
+    Ok(())
+}
+
+fn execute_single(action: &Action, log: &dyn Fn(String)) -> Result<(), String> {
     match action {
         Action::Run { command, args } => {
             Command::new(command)
@@ -146,7 +220,56 @@ pub fn execute(action: &Action) -> Result<(), String> {
             press(&[key_event(vk, false), key_event(vk, true)]);
         }
         Action::Page { .. } => return Err("page switches only happen on the deck itself".into()),
-        Action::Print { text } => println!("{text}"), // the service logs it to the window instead
+        Action::Print { text } => log(format!("PRINT: {text}")),
+        // handled in execute_logged
+        Action::Delay { .. } | Action::Text { .. } | Action::Macro { .. } => unreachable!(),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hot(k: &str) -> Action {
+        Action::Hotkey { keys: k.into() }
+    }
+
+    #[test]
+    fn macro_validation() {
+        assert!(validate(&Action::Macro { steps: vec![hot("ctrl+c"), Action::Delay { ms: 200 }, Action::Text { text: "hi".into() }] }).is_ok());
+        assert!(validate(&Action::Macro { steps: vec![] }).is_err());
+        assert!(validate(&Action::Macro { steps: vec![Action::Page { to: "next".into() }] }).is_err());
+        assert!(validate(&Action::Macro { steps: vec![Action::Macro { steps: vec![hot("ctrl+c")] }] }).is_err());
+        let e = validate(&Action::Macro { steps: vec![hot("ctrl+c"), hot("ctrl+nope")] }).unwrap_err();
+        assert!(e.contains("step 2"), "{e}");
+        assert!(validate(&Action::Delay { ms: 5 }).is_err());
+        assert!(validate(&Action::Delay { ms: 60_001 }).is_err());
+        assert!(validate(&Action::Text { text: String::new() }).is_err());
+        assert!(validate(&Action::Macro { steps: vec![Action::Delay { ms: 10 }; 51] }).is_err());
+    }
+
+    #[test]
+    fn macro_runs_in_order_with_waits() {
+        use std::sync::Mutex;
+        let log = Mutex::new(Vec::new());
+        let m = Action::Macro { steps: vec![
+            Action::Print { text: "a".into() },
+            Action::Delay { ms: 120 },
+            Action::Print { text: "b".into() },
+        ] };
+        let t = std::time::Instant::now();
+        execute_logged(&m, &|s| log.lock().unwrap().push(s)).unwrap();
+        assert!(t.elapsed().as_millis() >= 120);
+        assert_eq!(*log.lock().unwrap(), vec!["PRINT: a".to_string(), "PRINT: b".to_string()]);
+    }
+
+    #[test]
+    fn macro_toml_roundtrip() {
+        let text = "type = \"macro\"\n[[steps]]\ntype = \"hotkey\"\nkeys = \"ctrl+c\"\n[[steps]]\ntype = \"delay\"\nms = 200\n[[steps]]\ntype = \"text\"\ntext = \"x\"\n";
+        let a: Action = toml::from_str(text).unwrap();
+        assert!(matches!(&a, Action::Macro { steps } if steps.len() == 3));
+        let back: Action = toml::from_str(&toml::to_string(&a).unwrap()).unwrap();
+        assert_eq!(a, back);
+    }
 }

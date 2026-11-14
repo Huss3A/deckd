@@ -68,8 +68,22 @@ action = { type = "run", command = "notepad.exe" }
 ```
 
 Actions: `run {command,args}`, `open {target}`, `hotkey {keys}` (e.g. `win+shift+s`), `media {key}`
-(`vol_up vol_down mute play_pause next prev stop`), `page {to}` (`next`, `prev`, `home` or a page number).
-Nothing runs unless a button defines an action.
+(`vol_up vol_down mute mic_mute play_pause next prev stop`), `page {to}` (`next`, `prev`, `home` or a page number),
+`text {text}` (types the text into the focused window; line breaks press Enter), `delay {ms}` (10-60000) and
+`macro {steps}`: several actions run in order on their own thread, e.g.
+```toml
+[button.action]
+type = "macro"
+steps = [
+  { type = "hotkey", keys = "ctrl+c" },
+  { type = "delay", ms = 250 },
+  { type = "text", text = "Best regards," },
+]
+```
+Macros work in every gesture (tap, double, hold steps); not as `repeat` / `tap_hold`, and no page switch or nested macro inside one.
+Window: pick "Macro" for a gesture, then "+ Add step" (hotkey, type text, wait, program, open, media, print), reorder with the arrows.
+CLI: `deckd set 1,1 --action-type hotkey --keys ctrl+c --append` adds a step (a plain action becomes step 1), also
+`--action-type delay --ms 250` and `--action-type text --text "hi"`; `--remove-step N` deletes one. Nothing runs unless a button defines an action.
 
 **Faces (what a button shows):** `face = "image"` (default: picture / symbol; an `icon` ending in `.gif` animates, using the GIF's own
 frame timing, min 100 ms), `"live_clock"` (time drawn by deckd, `clock_format` strftime like `%H:%M` or `%H:%M\n%a %d %b`, colors =

@@ -228,6 +228,16 @@ fn run_action(action: &Action, page: u8, cfg: &Config, ctx: &Ctx) -> Option<u8> 
         ctx.log(format!("PRINT: {text}"));
         return None;
     }
+    if matches!(action, Action::Macro { .. } | Action::Delay { .. } | Action::Text { .. }) {
+        // these take time (waits, typing): never block the loop that reads the deck
+        let (action, ctx) = (action.clone(), ctx.clone());
+        std::thread::spawn(move || {
+            if let Err(e) = actions::execute_logged(&action, &|m| ctx.log(m)) {
+                ctx.log(format!("macro failed: {e}"));
+            }
+        });
+        return None;
+    }
     if let Err(e) = actions::execute(action) {
         ctx.log(format!("action failed: {e}"));
     }
@@ -268,7 +278,7 @@ fn run_hold_group(steps: Vec<crate::config::HoldStep>, index: u8, held_ms: u128,
                 match a {
                     Action::Print { text } => ctx.log(format!("PRINT: {text}")),
                     other => {
-                        if let Err(e) = actions::execute(other) {
+                        if let Err(e) = actions::execute_logged(other, &|m| ctx.log(m)) {
                             ctx.log(format!("action failed: {e}"));
                         }
                     }
