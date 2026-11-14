@@ -1,0 +1,28 @@
+name = "Paper"
+author = "deckd"
+description = "Light and warm, editor on the left, compact"
+base = "light"
+
+[colors]
+window = "#efe9dd"
+panel = "#faf6ee"
+card = "#f1ebde"
+input = "#fffdf8"
+text = "#2b2620"
+text_dim = "#857b6c"
+accent = "#b4552d"
+border = "#d8cdb8"
+hover = "#e8dfcc"
+select = "#b4552d"
+tile_empty = "#e2d9c6"
+tile_border = "#cbbfa6"
+
+[shape]
+rounding = 3
+tile_rounding = 5
+card_rounding = 4
+
+[layout]
+inspector = "left"
+density = "compact"
+tabs = "boxed"

@@ -111,6 +111,23 @@ Each button can override the tap and double-tap rim colors (`rim_tap`, `rim_doub
 that one button's picture with a border, then the normal picture. Also in the window under "Button feedback", and `deckd feedback`.
 Example volume-up button: `action = media vol_up` plus `repeat = media vol_up` (tap = one step, hold = continuous).
 
+## Window styles (skins)
+
+The window's look is separate from the deck config. A style is a TOML file: drop `name.toml` (or a folder `name\style.toml` that
+can also hold a font and a background image) into `<config folder>\styles\` (default `%APPDATA%\deckd\styles`), then pick it in
+the window: gear icon, Settings, Window style. Saving the file updates the open window live. A style can change colors, corner
+rounding, deck key size and gap, font and sizes, and the layout: which side the editor is on, its width, compact or comfortable
+spacing, tab look (pills / underline / boxed), deck alignment, hints on or off, and a background picture. Anything left out falls
+back to its `base` (dark or light), so a style can be three lines. A broken style never breaks the window: the previous look stays
+and Settings shows what is wrong. "Create a style to edit" writes a commented template. Bundled examples: Midnight, Paper, Terminal
+(copied into the styles folder on first run; source in `styles/`). The choice is stored in `ui.toml` beside `deck.toml`.
+Styles only change the window, never what the deck shows.
+
+**Window shortcuts:** Ctrl+Z / Ctrl+Y undo and redo (one step per saved batch of edits), Ctrl+C / Ctrl+V copy and paste a button
+(also as TOML text on the clipboard), Ctrl+D duplicates to the next free key, Del clears, arrow keys move the selection, right-click
+a key for the same actions. The editor has Look / Actions / State tabs with a live preview of the tile rendered by the same code
+that feeds the deck; per-button rim colors sit next to the gesture they belong to; global feedback settings are in Settings.
+
 ## Layout of the repo
 
 | Path | Purpose |

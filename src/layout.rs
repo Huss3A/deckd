@@ -372,7 +372,11 @@ fn render_icon(b: Option<&Button>, cfg: &Config, font: Option<&FontVec>, w: u32,
 
 /// The glyph font, read once and cached (live faces redraw every second or so).
 fn load_font(cfg: &Config) -> Result<Option<Arc<FontVec>>, String> {
-    if !cfg.buttons.iter().any(|b| b.glyph.is_some() || b.face.is_live() || b.alt.as_ref().is_some_and(|a| a.glyph.is_some())) {
+    load_font_for(cfg, &cfg.buttons)
+}
+
+fn load_font_for(cfg: &Config, buttons: &[Button]) -> Result<Option<Arc<FontVec>>, String> {
+    if !buttons.iter().any(|b| b.glyph.is_some() || b.face.is_live() || b.alt.as_ref().is_some_and(|a| a.glyph.is_some())) {
         return Ok(None);
     }
     static CACHE: Mutex<Option<(String, Arc<FontVec>)>> = Mutex::new(None);
@@ -442,6 +446,17 @@ pub fn cell_zip(cfg: &Config, page: u8, col: u8, row: u8, rim: Option<([u8; 3], 
     zip.start_file("manifest.json", opts).map_err(|e| e.to_string())?;
     zip.write_all(serde_json::to_string(&manifest).map_err(|e| e.to_string())?.as_bytes()).map_err(|e| e.to_string())?;
     Ok(zip.finish().map_err(|e| e.to_string())?.into_inner())
+}
+
+/// The tile exactly as the deck gets it (PNG bytes), for the window's live preview. `b` may be an unsaved edit;
+/// `alt` renders its alternate look. `wide` = the 458 px wide slot.
+pub fn preview_png(cfg: &Config, b: &Button, wide: bool, alt: bool, live: &Live) -> Result<Vec<u8>, String> {
+    let glyph_font = load_font_for(cfg, std::slice::from_ref(b))?;
+    let shown = b.shown(alt);
+    if shown.face.is_firmware() {
+        return Err("the deck draws this itself".into());
+    }
+    render_icon(Some(&shown), cfg, glyph_font.as_deref(), if wide { WIDE_W } else { ICON }, live)
 }
 
 /// Full layout: every cell is described so the deck never shows stale content.

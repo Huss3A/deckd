@@ -1,0 +1,54 @@
+# deckd window style. Edit and save: the open window updates live.
+# Every line is optional; anything you delete falls back to the base style.
+# Colors are #rrggbb (or #rrggbbaa). Paths are relative to this folder.
+
+name = "My style"
+author = "you"
+description = "Describe the look in one line"
+base = "dark"                  # "dark" or "light": what unlisted values start from
+
+[colors]
+window      = "#181a1f"        # behind the deck
+panel       = "#1f2228"        # side panels, bars, popups
+card        = "#262a32"        # buttons, groups, inputs' surroundings
+input       = "#14161a"        # text fields, sliders' tracks
+text        = "#e6e8eb"
+text_dim    = "#8b93a0"        # hints and secondary text
+accent      = "#2f81f7"        # active tabs, pressed buttons, slider fill
+accent_text = "#ffffff"        # text on the accent color
+border      = "#363b45"
+hover       = "#30353f"
+select      = "#58a6ff"        # outline of the selected deck button
+ok          = "#3fb950"        # connected / saved
+warn        = "#d29922"
+error       = "#ff7b72"
+tile_empty  = "#202020"        # an empty deck button
+tile_border = "#464b55"        # outline of deck buttons
+press       = "#f2cc3a"        # flash when you press a real button on the deck
+
+[shape]
+rounding      = 6              # buttons, inputs (0 = square corners)
+tile_rounding = 9              # deck buttons in the preview
+card_rounding = 8              # groups and popups
+border_width  = 1.0
+tile_size     = 92             # deck button size in px (56-150)
+tile_gap      = 8              # space between deck buttons
+
+[text]
+# font = "MyFont.ttf"          # put the font file next to this one
+family       = "proportional"  # or "monospace"
+body_size    = 14
+heading_size = 18
+small_size   = 11.5
+
+[layout]
+inspector       = "right"      # "left" or "right": where the button editor sits
+inspector_width = 400
+density         = "comfortable" # or "compact" (tighter spacing)
+tabs            = "pills"      # "pills", "underline" or "boxed"
+deck_align      = "center"     # or "left"
+hints           = true         # the small help lines under the deck and editor
+
+[background]
+# image   = "background.png"   # drawn behind the deck, stretched to cover it
+opacity = 0.25

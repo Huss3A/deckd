@@ -22,6 +22,7 @@ mod layout;
 mod protocol;
 mod service;
 mod sysstats;
+mod theme;
 
 use config::{Config, SAMPLE};
 use hidapi::{HidApi, HidDevice};

@@ -1,0 +1,38 @@
+name = "Terminal"
+author = "deckd"
+description = "Green on black, monospace, square corners, no hints"
+base = "dark"
+
+[colors]
+window = "#000000"
+panel = "#050a05"
+card = "#0a140a"
+input = "#000000"
+text = "#9cff9c"
+text_dim = "#4a8a4a"
+accent = "#1fbf3f"
+accent_text = "#000000"
+border = "#1a4a1a"
+hover = "#12301a"
+select = "#6dff6d"
+ok = "#6dff6d"
+warn = "#ffd24a"
+error = "#ff5f5f"
+tile_empty = "#050f05"
+tile_border = "#1a4a1a"
+press = "#ffffff"
+
+[shape]
+rounding = 0
+tile_rounding = 0
+card_rounding = 0
+
+[text]
+family = "monospace"
+body_size = 13
+heading_size = 16
+
+[layout]
+density = "compact"
+tabs = "boxed"
+hints = false

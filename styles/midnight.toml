@@ -1,0 +1,27 @@
+name = "Midnight"
+author = "deckd"
+description = "Deep blue with a violet accent, underlined tabs"
+base = "dark"
+
+[colors]
+window = "#0d1021"
+panel = "#141833"
+card = "#1c2147"
+input = "#0a0d1c"
+text = "#e8eaff"
+text_dim = "#8a90c0"
+accent = "#8b5cf6"
+accent_text = "#ffffff"
+border = "#2b3270"
+hover = "#262d5e"
+select = "#a78bfa"
+tile_empty = "#12162e"
+tile_border = "#2f3778"
+
+[shape]
+rounding = 8
+tile_rounding = 12
+card_rounding = 10
+
+[layout]
+tabs = "underline"
