@@ -70,8 +70,8 @@ fn modified(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
-fn upload_layout(dev: &HidDevice, cfg: &Config, page: u8, ctx: &Ctx) -> Result<(), String> {
-    let zip = layout::build_zip(cfg, page)?;
+fn upload_layout(dev: &HidDevice, cfg: &Config, page: u8, ctx: &Ctx, live: &layout::Live) -> Result<(), String> {
+    let zip = layout::build_zip_live(cfg, page, live)?;
     protocol::upload_zip(dev, cmd::FULL_LAYOUT, &zip, true)?;
     ctx.log(format!("page {page}/{}: layout uploaded ({} bytes)", cfg.page_count(), zip.len()));
     Ok(())
@@ -96,12 +96,12 @@ enum Glow {
 /// Flash requests collected while handling a press; the session loop sends them to the deck.
 type GlowQueue = Vec<(u8, Glow)>;
 
-fn send_cell(dev: &HidDevice, cfg: &Config, page: u8, idx: usize, rim: Option<([u8; 3], u32, u32)>) -> Result<(), String> {
-    // a wide slot that keeps the firmware clock has no picture to draw a rim on
-    if idx == 13 && cfg.button_at(page, 3, 2).is_some_and(|b| b.keep_clock) {
+fn send_cell(dev: &HidDevice, cfg: &Config, page: u8, idx: usize, rim: Option<([u8; 3], u32, u32)>, live: &layout::Live) -> Result<(), String> {
+    // a wide slot whose display belongs to the firmware (clock / stats) has no picture to draw a rim on
+    if idx == 13 && cfg.button_at(page, 3, 2).is_some_and(|b| b.face.is_firmware()) {
         return Ok(());
     }
-    let zip = layout::cell_zip(cfg, page, (idx % 5) as u8, (idx / 5) as u8, rim)?;
+    let zip = layout::cell_zip(cfg, page, (idx % 5) as u8, (idx / 5) as u8, rim, live)?;
     protocol::upload_zip(dev, cmd::PARTIAL_LAYOUT, &zip, false)
 }
 
@@ -130,6 +130,10 @@ impl WideFilter {
     fn accept(&mut self, index: u8, state: u8, _pressed: bool) -> bool {
         index == 13 || state == 0x01
     }
+}
+
+fn make_live(sampler: &crate::sysstats::Sampler, anim_start: Instant) -> layout::Live {
+    layout::Live { now: chrono::Local::now(), stats: sampler.stats(), tick_ms: anim_start.elapsed().as_millis() as u64 }
 }
 
 /// Runs an action. Returns the new page when it was a page switch.
@@ -239,7 +243,17 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
     let result = (|| {
         let mut page: u8 = 1;
         ctx.with(|s| s.page = page);
-        upload_layout(&dev, cfg, page, ctx)?;
+        let mut sampler = crate::sysstats::Sampler::new();
+        std::thread::sleep(Duration::from_millis(50));
+        sampler.sample();
+        let anim_start = Instant::now();
+        let mut last_sample = Instant::now();
+        let mut live = make_live(&sampler, anim_start);
+        upload_layout(&dev, cfg, page, ctx, &live)?;
+        // live faces / GIFs: when each cell's picture was last (re)sent
+        let mut last_draw = [Instant::now(); 14];
+        let mut last_frame: [Option<usize>; 14] = [None; 14];
+        let mut last_live = Instant::now();
         let mut last_beat = Instant::now();
         let mut last_check = Instant::now();
         let mut last_press = [Instant::now() - DEBOUNCE; 16];
@@ -250,6 +264,11 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
         let mut glow_until: [Option<Instant>; 14] =[None; 14];
         let mut buf = [0u8; PACKET + 1];
         loop {
+            if last_sample.elapsed() >= Duration::from_secs(1) {
+                last_sample = Instant::now();
+                sampler.sample();
+            }
+            live = make_live(&sampler, anim_start);
             if let Some(p) = switch.take() {
                 if p != page {
                     page = p;
@@ -257,12 +276,42 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                     glow_until = [None; 14]; // the full upload below redraws every tile
                     glow_q.clear();
                     ctx.with(|s| s.page = page);
-                    upload_layout(&dev, cfg, page, ctx)?;
+                    upload_layout(&dev, cfg, page, ctx, &live)?;
+                    last_draw = [Instant::now(); 14];
+                    last_frame = [None; 14];
                 }
             }
-            if last_beat.elapsed() >= HEARTBEAT_EVERY {
-                protocol::heartbeat_mode(&dev, if cfg.button_at(page, 3, 2).is_some_and(|b| !b.keep_clock) { 2 } else { 1 })?;
+            // the firmware's own stats readout needs fresh numbers every second; otherwise the 5 s heartbeat is enough
+            let mode = cfg.wide_mode(page);
+            let beat_every = if mode == 0 { Duration::from_secs(1) } else { HEARTBEAT_EVERY };
+            if last_beat.elapsed() >= beat_every {
+                protocol::heartbeat_mode(&dev, mode, live.stats.cpu.round() as u8, live.stats.mem.round() as u8)?;
                 last_beat = Instant::now();
+            }
+            // live faces and GIF animations: re-send a cell's picture when its interval is up (not while a rim is shown or the
+            // button is held down: an upload blocks the read loop and would delay the release event)
+            if last_live.elapsed() >= Duration::from_millis(50) {
+                last_live = Instant::now();
+                for i in 0..14usize {
+                    let Some(b) = cfg.button_for_index(page, i as u8) else { continue };
+                    if b.face.is_firmware() || glow_until[i].is_some() || keys[i].down.is_some() {
+                        continue;
+                    }
+                    // live faces redraw on their refresh interval; a GIF whenever its frame changes
+                    let frame = layout::gif_frame_index(b, cfg, i == 13, live.tick_ms);
+                    let due = if b.face.is_live() {
+                        last_draw[i].elapsed() >= Duration::from_millis(b.refresh_ms as u64)
+                    } else {
+                        frame.is_some() && frame != last_frame[i]
+                    };
+                    if due {
+                        last_draw[i] = Instant::now();
+                        last_frame[i] = frame;
+                        if let Err(e) = send_cell(&dev, cfg, page, i, None, &live) {
+                            ctx.log(format!("live redraw failed on button {i}: {e}"));
+                        }
+                    }
+                }
             }
             if last_check.elapsed() >= Duration::from_secs(1) {
                 last_check = Instant::now();
@@ -281,7 +330,9 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                             glow_until = [None; 14];
                             glow_q.clear();
                             protocol::send(&dev, cmd::BRIGHTNESS, cfg.brightness.min(100).to_string().as_bytes())?;
-                            upload_layout(&dev, cfg, page, ctx)?;
+                            upload_layout(&dev, cfg, page, ctx, &live)?;
+                            last_draw = [Instant::now(); 14];
+                            last_frame = [None; 14];
                         }
                         Err(e) => {
                             ctx.log(format!("config not reloaded (keeping the old one): {e}"));
@@ -321,7 +372,7 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                         if let (Some(ms), true) = (top, top != keys[i].tier_shown) {
                             let fb = &cfg.feedback;
                             let rgb = fb.tier_color(b, ms);
-                            match send_cell(&dev, cfg, page, i, Some((rgb, fb.width as u32, fb.radius as u32))) {
+                            match send_cell(&dev, cfg, page, i, Some((rgb, fb.width as u32, fb.radius as u32)), &live) {
                                 Ok(()) => {
                                     keys[i].tier_shown = Some(ms);
                                     glow_until[i] = Some(Instant::now() + Duration::from_secs(REPEAT_MAX_SECS + 1)); // until release
@@ -354,7 +405,7 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                     Glow::Repeat => &fb.repeat,
                 };
                 let rgb = crate::config::parse_hex(hex).unwrap_or([255, 255, 255]);
-                match send_cell(&dev, cfg, page, idx as usize, Some((rgb, fb.width as u32, fb.radius as u32))) {
+                match send_cell(&dev, cfg, page, idx as usize, Some((rgb, fb.width as u32, fb.radius as u32)), &live) {
                     Ok(()) => {
                         ctx.log(format!("rim: {g:?} on button {idx} (#{:02x}{:02x}{:02x})", rgb[0], rgb[1], rgb[2]));
                         // a repeat keeps its rim until release (the release handler ends it)
@@ -375,7 +426,9 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                         continue;
                     }
                     glow_until[i] = None;
-                    if let Err(e) = send_cell(&dev, cfg, page, i, None) {
+                    last_draw[i] = Instant::now();
+                    last_frame[i] = None;
+                    if let Err(e) = send_cell(&dev, cfg, page, i, None, &live) {
                         ctx.log(format!("glow restore failed: {e}"));
                     }
                 }
@@ -439,7 +492,9 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                     Some(Event::Other { cmd: cmd::CONFIG_REQUESTED, .. }) => {
                         ctx.log("deck asked for its layout again");
                         glow_until = [None; 14];
-                        upload_layout(&dev, cfg, page, ctx)?;
+                        upload_layout(&dev, cfg, page, ctx, &live)?;
+                        last_draw = [Instant::now(); 14];
+                        last_frame = [None; 14];
                     }
                     _ => {}
                 },

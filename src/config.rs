@@ -211,15 +211,67 @@ pub struct Button {
     pub glyph_color: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action: Option<Action>,
-    /// Wide slot (3,2) only: keep the firmware clock on screen and use the slot just for actions (no picture, no rim).
-    #[serde(default, skip_serializing_if = "is_false")]
+    /// Old name for `face = "clock"`; read from old config files and migrated on load, never written back.
+    #[serde(default, skip_serializing)]
     pub keep_clock: bool,
+    /// What the button shows: its picture/symbol (default), or a live clock / live stats picture drawn by deckd. On the wide slot (3,2)
+    /// only, `clock` / `stats` hand the display to the firmware's own clock / stats readout (no picture, no rim).
+    #[serde(default, skip_serializing_if = "Face::is_image")]
+    pub face: Face,
+    /// Live faces: redraw interval in ms (200-60000). Animated GIF icons use the GIF's own frame timing instead.
+    #[serde(default = "default_refresh_ms", skip_serializing_if = "is_default_refresh")]
+    pub refresh_ms: u16,
+    /// `live_clock`: chrono/strftime format, e.g. "%H:%M" (default) or "%H:%M:%S".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_format: Option<String>,
+    /// `live_stats`: "bars" (default), "line" or "text".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stats_style: Option<String>,
     /// Rim color for this button's tap (overrides `[feedback] tap`), "#rrggbb".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rim_tap: Option<String>,
     /// Rim color for this button's double tap (overrides `[feedback] double`), "#rrggbb".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rim_double: Option<String>,
+}
+
+/// What a button shows.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Face {
+    /// Its picture / symbol / animated GIF (default).
+    #[default]
+    Image,
+    /// Wide slot only: the firmware's own clock.
+    Clock,
+    /// Wide slot only: the firmware's own CPU/memory readout (values sent in the heartbeat).
+    Stats,
+    /// A clock drawn by deckd as a picture (any button).
+    LiveClock,
+    /// CPU / memory graphs drawn by deckd as a picture (any button).
+    LiveStats,
+}
+
+impl Face {
+    pub fn is_image(&self) -> bool {
+        *self == Face::Image
+    }
+    /// The firmware draws these itself; no picture is sent for the cell.
+    pub fn is_firmware(self) -> bool {
+        matches!(self, Face::Clock | Face::Stats)
+    }
+    /// deckd redraws these on a timer.
+    pub fn is_live(self) -> bool {
+        matches!(self, Face::LiveClock | Face::LiveStats)
+    }
+}
+
+pub const DEFAULT_REFRESH_MS: u16 = 1000;
+fn default_refresh_ms() -> u16 {
+    DEFAULT_REFRESH_MS
+}
+fn is_default_refresh(v: &u16) -> bool {
+    *v == DEFAULT_REFRESH_MS
 }
 
 /// What happens when the button is pressed. Nothing runs unless a button defines an action.
@@ -255,6 +307,9 @@ impl Config {
         cfg.base_dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
         // migrate the old single hold / long hold fields into the `holds` list
         for b in &mut cfg.buttons {
+            if std::mem::take(&mut b.keep_clock) {
+                b.face = Face::Clock;
+            }
             if let Some(a) = b.hold.take() {
                 b.holds.push(HoldStep { ms: b.hold_ms, action: a, color: None, split: false });
             }
@@ -280,6 +335,7 @@ impl Config {
                     parse_hex(c).ok_or_else(|| format!("button {:?}: hold step color {c:?} must be #rrggbb", b.pos))?;
                 }
             }
+            b.check_face()?;
             for (n, c) in [("rim_tap", &b.rim_tap), ("rim_double", &b.rim_double)] {
                 if let Some(c) = c {
                     parse_hex(c).ok_or_else(|| format!("button {:?}: {n} {c:?} must be #rrggbb", b.pos))?;
@@ -306,6 +362,15 @@ impl Config {
     /// The button for an index reported by the deck (index = row*5 + col) on a page.
     pub fn button_for_index(&self, page: u8, index: u8) -> Option<&Button> {
         self.buttons.iter().find(|b| b.page == page && b.cell().map(|(c, r)| r * COLS + c) == Ok(index))
+    }
+
+    /// The wide slot's display mode for the heartbeat: 1 = firmware clock, 0 = firmware stats, 2 = our own picture.
+    pub fn wide_mode(&self, page: u8) -> u8 {
+        match self.button_at(page, 3, 2).map(|b| b.face) {
+            None | Some(Face::Clock) => 1,
+            Some(Face::Stats) => 0,
+            Some(_) => 2,
+        }
     }
 
     pub fn button_at(&self, page: u8, col: u8, row: u8) -> Option<&Button> {
@@ -347,7 +412,7 @@ impl Default for Config {
 
 impl Default for Button {
     fn default() -> Self {
-        Button { page: 1, pos: String::new(), double: None, holds: Vec::new(), hold: None, hold_ms: DEFAULT_HOLD_MS, hold_long: None, hold_long_ms: DEFAULT_LONG_MS, repeat: None, repeat_ms: DEFAULT_REPEAT_MS, label: None, color: None, icon: None, glyph: None, glyph_color: None, action: None, keep_clock: false, rim_tap: None, rim_double: None }
+        Button { page: 1, pos: String::new(), double: None, holds: Vec::new(), hold: None, hold_ms: DEFAULT_HOLD_MS, hold_long: None, hold_long_ms: DEFAULT_LONG_MS, repeat: None, repeat_ms: DEFAULT_REPEAT_MS, label: None, color: None, icon: None, glyph: None, glyph_color: None, action: None, keep_clock: false, face: Face::Image, refresh_ms: DEFAULT_REFRESH_MS, clock_format: None, stats_style: None, rim_tap: None, rim_double: None }
     }
 }
 
@@ -359,6 +424,28 @@ impl Button {
             Some(t) => self.holds.iter().filter(|h| h.ms == t).collect(),
             None => Vec::new(),
         }
+    }
+
+    /// Validates the display settings (shared by the loader, the window and the agent CLI).
+    pub fn check_face(&self) -> Result<(), String> {
+        let at = || format!("button {:?} (page {})", self.pos, self.page);
+        if self.face.is_firmware() && self.cell() != Ok((3, 2)) {
+            return Err(format!("{}: face {:?} (firmware clock/stats) only works on the wide slot \"3,2\"", at(), self.face));
+        }
+        if !(200..=60000).contains(&self.refresh_ms) {
+            return Err(format!("{}: refresh_ms must be 200-60000", at()));
+        }
+        if let Some(f) = &self.clock_format {
+            if chrono::format::StrftimeItems::new(f).any(|i| matches!(i, chrono::format::Item::Error)) || f.is_empty() {
+                return Err(format!("{}: clock_format {f:?} is not a valid time format (try \"%H:%M\" or \"%H:%M:%S\")", at()));
+            }
+        }
+        if let Some(s) = &self.stats_style {
+            if !["bars", "line", "text"].contains(&s.as_str()) {
+                return Err(format!("{}: stats_style must be bars, line or text", at()));
+            }
+        }
+        Ok(())
     }
 
     /// (col, row), validated against what the hardware has.

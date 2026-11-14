@@ -92,6 +92,7 @@ fn check(cfg: &Config) -> Result<usize, CliError> {
     cfg.feedback.validate().map_err(invalid)?;
     for b in &cfg.buttons {
         b.cell().map_err(invalid)?;
+        b.check_face().map_err(invalid)?;
         if let Some(c) = b.rim_tap.iter().chain(b.rim_double.iter()).find(|c| crate::config::parse_hex(c).is_none()) {
             return Err(usage(format!("rim color {c:?} must be #rrggbb")));
         }
@@ -176,14 +177,32 @@ pub fn run(cmd: &str, raw: &[String]) -> Result<(), CliError> {
             if let Some(v) = a.get("icon") { b.icon = opt(v); }
             if let Some(v) = a.get("glyph") { b.glyph = opt(v); }
             if let Some(v) = a.get("glyph-color") { b.glyph_color = opt(v); }
-            // per-button rim colors for tap / double tap ("" resets to the global [feedback] color)
+            // what the button shows (clock / stats are the firmware's own display and only work on the wide slot 3,2)
+            if let Some(v) = a.get("face") {
+                use crate::config::Face;
+                b.face = match v {
+                    "image" => Face::Image,
+                    "live_clock" => Face::LiveClock,
+                    "live_stats" => Face::LiveStats,
+                    "clock" => Face::Clock,
+                    "stats" => Face::Stats,
+                    _ => return Err(usage("--face must be image, live_clock, live_stats, clock or stats")),
+                };
+            }
             if let Some(v) = a.get("keep-clock") {
-                b.keep_clock = match v {
-                    "true" => true,
-                    "false" => false,
+                // old name for --face clock
+                b.face = match v {
+                    "true" => crate::config::Face::Clock,
+                    "false" => crate::config::Face::Image,
                     _ => return Err(usage("--keep-clock must be true or false")),
                 };
             }
+            if let Some(ms) = a.get("refresh-ms") {
+                b.refresh_ms = ms.parse().map_err(|_| usage("--refresh-ms must be a number 200-60000"))?;
+            }
+            if let Some(v) = a.get("clock-format") { b.clock_format = opt(v); }
+            if let Some(v) = a.get("stats-style") { b.stats_style = opt(v); }
+            // per-button rim colors for tap / double tap ("" resets to the global [feedback] color)
             if let Some(v) = a.get("rim-tap") { b.rim_tap = opt(v); }
             if let Some(v) = a.get("rim-double") { b.rim_double = opt(v); }
             if let Some(ms) = a.get("repeat-ms") {
@@ -294,7 +313,7 @@ pub fn run(cmd: &str, raw: &[String]) -> Result<(), CliError> {
             for page in 1..=cfg.page_count() {
                 let pdir = dir.join(format!("page{page}"));
                 std::fs::create_dir_all(&pdir).map_err(|e| internal(e.to_string()))?;
-                let zip = layout::build_zip(&cfg, page).map_err(invalid)?;
+                let zip = layout::build_zip_live(&cfg, page, &layout::Live::demo()).map_err(invalid)?; // demo stats, current time
                 let mut arch = zip::ZipArchive::new(std::io::Cursor::new(zip)).map_err(|e| internal(e.to_string()))?;
                 for i in 0..arch.len() {
                     let mut f = arch.by_index(i).map_err(|e| internal(e.to_string()))?;
@@ -402,7 +421,10 @@ fn schema() -> Value {
                     "icon": {"type": "string", "description": "image path, scaled to 196x196"},
                     "glyph": {"type": "string", "description": "symbol drawn large in the middle"},
                     "glyph_color": color,
-                    "keep_clock": {"type": "boolean", "description": "wide slot 3,2 only: keep the firmware clock, actions only"},
+                    "face": {"enum": ["image", "live_clock", "live_stats", "clock", "stats"], "description": "what the button shows; clock/stats = the firmware's own display, wide slot 3,2 only; an icon ending in .gif animates"},
+                    "refresh_ms": {"type": "integer", "minimum": 200, "maximum": 60000, "description": "live faces: redraw interval"},
+                    "clock_format": {"type": "string", "description": "live_clock: strftime format, e.g. %H:%M or %H:%M:%S"},
+                    "stats_style": {"enum": ["bars", "line", "text"], "description": "live_stats look"},
                     "rim_tap": color,
                     "rim_double": color,
                     "page": {"type": "integer", "minimum": 1, "maximum": 9, "default": 1},

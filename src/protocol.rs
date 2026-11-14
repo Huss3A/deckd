@@ -73,13 +73,14 @@ pub fn open(api: &HidApi) -> Result<HidDevice, String> {
 
 /// Small-window data `mode|cpu|mem|time|gpu|12H|` (mode 1 = clock); also the keep-alive.
 pub fn heartbeat(dev: &HidDevice) -> Result<(), String> {
-    heartbeat_mode(dev, 1)
+    heartbeat_mode(dev, 1, 0, 0)
 }
 
-/// `mode` is the wide slot's display mode: 1 = firmware clock, 2 = our own picture (community docs, unverified on this deck).
-pub fn heartbeat_mode(dev: &HidDevice, mode: u8) -> Result<(), String> {
+/// `mode` is the wide slot's display mode: 1 = firmware clock, 2 = our own picture (works, verified), 0 = firmware stats
+/// (from community docs, unverified on this deck). `cpu` / `mem` are percent values the firmware's stats readout shows.
+pub fn heartbeat_mode(dev: &HidDevice, mode: u8, cpu: u8, mem: u8) -> Result<(), String> {
     let now = chrono::Local::now().format("%H:%M:%S");
-    send(dev, cmd::SMALL_WINDOW, format!("{mode}|0|0|{now}|0|12H|").as_bytes())
+    send(dev, cmd::SMALL_WINDOW, format!("{mode}|{cpu}|{mem}|{now}|0|12H|").as_bytes())
 }
 
 pub fn drain(dev: &HidDevice) {

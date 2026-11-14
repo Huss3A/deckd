@@ -11,6 +11,7 @@
 //!   deckd upload|patch <file.zip> [seconds]
 
 #![cfg_attr(all(not(debug_assertions), feature = "windowed"), windows_subsystem = "windows")]
+#![recursion_limit = "512"] // the agent schema is one big json! literal
 
 mod actions;
 mod agent;
@@ -19,6 +20,7 @@ mod gui;
 mod layout;
 mod protocol;
 mod service;
+mod sysstats;
 
 use config::{Config, SAMPLE};
 use hidapi::{HidApi, HidDevice};
@@ -117,12 +119,12 @@ fn main() {
                 for (name, rgb, width) in colors {
                     protocol::heartbeat(d)?;
                     println!("--- {name}");
-                    let on = layout::cell_zip(&cfg, 1, col, row, Some((rgb, width, 18)))?;
+                    let on = layout::cell_zip(&cfg, 1, col, row, Some((rgb, width, 18)), &layout::Live::snapshot())?;
                     let t = Instant::now();
                     protocol::upload_zip(d, cmd::PARTIAL_LAYOUT, &on, false)?;
                     println!("{name} rim sent: {} bytes in {} ms", on.len(), t.elapsed().as_millis());
                     std::thread::sleep(Duration::from_millis(2000));
-                    let off = layout::cell_zip(&cfg, 1, col, row, None)?;
+                    let off = layout::cell_zip(&cfg, 1, col, row, None, &layout::Live::snapshot())?;
                     let t = Instant::now();
                     protocol::upload_zip(d, cmd::PARTIAL_LAYOUT, &off, false)?;
                     println!("restored: {} bytes in {} ms", off.len(), t.elapsed().as_millis());
@@ -143,7 +145,7 @@ fn main() {
                 .unwrap_or((0, 0));
             let rgb = config::parse_hex(arg(4).unwrap_or("#2f81f7")).ok_or("bad color")?;
             let fb = &cfg.feedback;
-            let zip = layout::cell_zip(&cfg, 1, col, row, Some((rgb, fb.width as u32, fb.radius as u32)))?;
+            let zip = layout::cell_zip(&cfg, 1, col, row, Some((rgb, fb.width as u32, fb.radius as u32)), &layout::Live::snapshot())?;
             let mut a = zip::ZipArchive::new(std::io::Cursor::new(zip)).map_err(|e| e.to_string())?;
             for i in 0..a.len() {
                 let mut f = a.by_index(i).map_err(|e| e.to_string())?;

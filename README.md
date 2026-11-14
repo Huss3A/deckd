@@ -71,6 +71,14 @@ Actions: `run {command,args}`, `open {target}`, `hotkey {keys}` (e.g. `win+shift
 (`vol_up vol_down mute play_pause next prev stop`), `page {to}` (`next`, `prev`, `home` or a page number).
 Nothing runs unless a button defines an action.
 
+**Faces (what a button shows):** `face = "image"` (default: picture / symbol; an `icon` ending in `.gif` animates, using the GIF's own
+frame timing, min 100 ms), `"live_clock"` (time drawn by deckd, `clock_format` strftime like `%H:%M` or `%H:%M\n%a %d %b`, colors =
+`color` background / `glyph_color` text), `"live_stats"` (CPU and RAM, `stats_style` = `bars` | `line` | `text`; GPU is not sampled),
+both redrawn every `refresh_ms` (200-60000, default 1000). Any button can use these. On the wide slot `"3,2"` only: `"clock"` keeps the
+firmware clock and `"stats"` hands the slot to the firmware's CPU/RAM readout (heartbeat then carries the numbers every second); neither
+draws a picture or a rim, so the button's actions still work under them. CLI: `deckd set 3,2 --face live_clock --clock-format %H:%M`.
+(Live faces and GIFs are built but not yet tried on the deck; the firmware stats mode comes from community docs only.)
+
 **Pages:** top-level `pages = N` (1-9) and `page = 2` on a button (omitted = page 1). A `page` action on a button switches
 the deck to another page (the service re-uploads that page's layout, ~1 s). Put a "back" button on each later page yourself.
 

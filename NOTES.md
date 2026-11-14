@@ -55,7 +55,15 @@ Status key: **[verified]** = tested on my unit (own client or captured from Ulan
 - The stock app also starts the ZIP with an explicit `Images/` directory entry; we keep it (not proven necessary).
 - Our own PNGs (plain `Images/sigma.png` names or uuid names) display fine; only the container mattered.
 
-## Wide slot as a button (built 2026-11-14, NOT yet tried on the deck)
+## Faces: live clock / stats / GIF (built 2026-11-14, offline-verified only)
+- `layout::Live{now, stats, tick_ms}` is what changes between redraws; `render_icon` draws live clock/stats and picks the GIF frame.
+  The service re-sends a cell as a 0x000D partial update (no rim, button not held) when its `refresh_ms` is up or its GIF frame changes;
+  rims restore the *current* frame. Stats come from `sysstats.rs` (GetSystemTimes + GlobalMemoryStatusEx, once a second, 60 samples).
+- Firmware faces on the wide slot: `clock` = manifest `SmallViewMode` 1, `stats` = `SmallViewMode` 0 (no icon) and heartbeat mode 0 with
+  `cpu`/`mem` percent in fields 2-3 (community docs, unverified on the deck), heartbeat every 1 s in stats mode.
+- Wide slot own picture (mode 2) is verified working (owner, 2026-11-14). Added crates: `gif` (image feature), no others.
+
+## Wide slot as a button (built 2026-11-14; picture mode and tap/hold verified by the owner)
 - Config pos `"3,2"` is the wide slot (`"4,2"` is rejected). With no button there, the layout keeps the firmware clock (`SmallViewMode` 1,
   heartbeat mode 1). With a button, the cell is `{"SmallViewMode":2, ..., "Icon": <458x196 png>}` and the heartbeat's first field is 2.
   Both come from community docs only; if the deck shows nothing / a broken slot, that is the first suspect.

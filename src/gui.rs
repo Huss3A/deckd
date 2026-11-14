@@ -1,7 +1,7 @@
 //! The deckd window: a clickable copy of the deck, an editor for the selected button, and live status.
 //! Edits are saved to deck.toml (debounced); the service thread notices the file change and re-uploads.
 
-use crate::config::{Action, Button, Config, COLS, ROWS, SAMPLE};
+use crate::config::{Action, Button, Config, Face, COLS, ROWS, SAMPLE};
 use crate::{actions, layout, service};
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 use std::collections::HashMap;
@@ -118,6 +118,7 @@ impl App {
             .iter()
             .try_for_each(|b| {
                 b.cell()?;
+                b.check_face()?;
                 [&b.action, &b.double, &b.repeat]
                     .into_iter()
                     .flatten()
@@ -196,8 +197,16 @@ impl App {
             1.0
         };
         paint_tile(ui.painter(), rect, b.as_ref(), tex.as_ref(), alpha);
-        if (col, row) == (3, 2) && b.is_none() {
-            ui.painter().text(rect.center(), Align2::CENTER_CENTER, "wide slot: firmware clock\n(click to set up a button)", FontId::proportional(12.0), Color32::GRAY);
+        let caption = match b.as_ref().map(|b| b.face) {
+            None if (col, row) == (3, 2) => Some("wide slot: firmware clock\n(click to set up a button)"),
+            Some(Face::Clock) => Some("firmware clock"),
+            Some(Face::Stats) => Some("firmware stats"),
+            Some(Face::LiveClock) => Some("live clock"),
+            Some(Face::LiveStats) => Some("live stats"),
+            _ => None,
+        };
+        if let Some(c) = caption {
+            ui.painter().text(rect.center(), Align2::CENTER_CENTER, c, FontId::proportional(12.0), Color32::GRAY);
         }
 
         let is_target = swapping.is_some_and(|(_, h)| h == (col, row) || (is_source && shown != (col, row)));
@@ -429,11 +438,61 @@ impl App {
         let snapshot = |b: &Button| serde_json::to_string(b).unwrap_or_default();
         let before = snapshot(&b);
 
-        // the wide slot can keep the firmware clock and only add actions under it
-        if (col, row) == (3, 2) {
-            ui.checkbox(&mut b.keep_clock, "Keep the firmware clock (use the slot for actions only)");
-            if b.keep_clock {
-                ui.weak("The look settings below are ignored while the clock is kept.");
+        // what the button shows: its picture, a live clock / stats drawn by deckd, or (wide slot only) the firmware's own display
+        {
+            let wide = (col, row) == (3, 2);
+            let name = |f: Face| match f {
+                Face::Image => "Picture / symbol / GIF",
+                Face::LiveClock => "Live clock (drawn by deckd)",
+                Face::LiveStats => "Live CPU / RAM stats (drawn by deckd)",
+                Face::Clock => "Firmware clock",
+                Face::Stats => "Firmware stats",
+            };
+            ui.horizontal(|ui| {
+                ui.label("Shows:");
+                egui::ComboBox::from_id_salt("face").selected_text(name(b.face)).width(240.0).show_ui(ui, |ui| {
+                    for f in [Face::Image, Face::LiveClock, Face::LiveStats, Face::Clock, Face::Stats] {
+                        if f.is_firmware() && !wide {
+                            continue;
+                        }
+                        ui.selectable_value(&mut b.face, f, name(f));
+                    }
+                });
+            });
+            if b.face.is_firmware() {
+                ui.weak("The deck draws this itself: no picture, no rim. The look settings below are ignored.");
+            }
+            if b.face.is_live() {
+                ui.horizontal(|ui| {
+                    ui.label("Redraw every");
+                    let mut ms = b.refresh_ms as f64;
+                    if ui.add(egui::Slider::new(&mut ms, 200.0..=60000.0).logarithmic(true).suffix(" ms")).changed() {
+                        b.refresh_ms = ms as u16;
+                    }
+                });
+            }
+            if b.face == Face::LiveClock {
+                ui.horizontal(|ui| {
+                    let mut f = b.clock_format.clone().unwrap_or_default();
+                    ui.add(egui::TextEdit::singleline(&mut f).desired_width(120.0).hint_text("%H:%M"));
+                    b.clock_format = (!f.is_empty()).then_some(f);
+                    for (label, fmt) in [("24h", "%H:%M"), ("24h + s", "%H:%M:%S"), ("12h", "%I:%M %p"), ("time + date", "%H:%M\n%a %d %b")] {
+                        if ui.small_button(label).clicked() {
+                            b.clock_format = Some(fmt.to_string());
+                        }
+                    }
+                });
+                ui.weak("Format codes: %H hour, %M minute, %S second, %a weekday, %d day, %b month. Colors: background / symbol below.");
+            }
+            if b.face == Face::LiveStats {
+                ui.horizontal(|ui| {
+                    ui.label("Style");
+                    let mut s = b.stats_style.clone().unwrap_or_else(|| "bars".into());
+                    for st in ["bars", "line", "text"] {
+                        ui.selectable_value(&mut s, st.to_string(), st);
+                    }
+                    b.stats_style = (s != "bars").then_some(s);
+                });
             }
             ui.add_space(4.0);
         }
@@ -611,7 +670,7 @@ impl App {
         }
 
         if before != snapshot(&b) {
-            let empty = b.label.is_none() && b.color.is_none() && b.glyph.is_none() && b.icon.is_none() && b.action.is_none() && b.double.is_none() && b.holds.is_empty() && b.repeat.is_none();
+            let empty = b.label.is_none() && b.color.is_none() && b.glyph.is_none() && b.icon.is_none() && b.face.is_image() && b.action.is_none() && b.double.is_none() && b.holds.is_empty() && b.repeat.is_none();
             if empty {
                 self.cfg.clear_button(page, col, row);
             } else {

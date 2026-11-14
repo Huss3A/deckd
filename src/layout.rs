@@ -1,11 +1,248 @@
 //! Renders icons and builds the layout ZIP the deck expects (manifest.json + Images/*.png).
 
-use crate::config::{Button, Config, COLS, ROWS};
+use crate::config::{Button, Config, Face, COLS, ROWS};
+use crate::sysstats::Stats;
 use ab_glyph::{point, Font, FontVec, Glyph, PxScale, ScaleFont};
 use image::{imageops::FilterType, ImageFormat, Rgba, RgbaImage};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::io::{Cursor, Write};
+use std::sync::{Arc, Mutex};
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+
+/// Everything that changes from one redraw to the next: the time, the system load and the animation clock.
+#[derive(Clone)]
+pub struct Live {
+    pub now: chrono::DateTime<chrono::Local>,
+    pub stats: Stats,
+    /// Milliseconds on the animation clock (decides which GIF frame is shown).
+    pub tick_ms: u64,
+}
+
+impl Live {
+    /// Made-up load history so `deckd preview` shows what the stats faces look like without sampling the machine.
+    pub fn demo() -> Live {
+        let wave = |phase: f32, base: f32| (0..60).map(|i| (base + 30.0 * ((i as f32 + phase) / 6.0).sin()).clamp(2.0, 98.0)).collect::<Vec<f32>>();
+        let (hist_cpu, hist_mem) = (wave(0.0, 40.0), wave(20.0, 62.0));
+        Live {
+            now: chrono::Local::now(),
+            stats: Stats { cpu: *hist_cpu.last().unwrap_or(&0.0), mem: *hist_mem.last().unwrap_or(&0.0), hist_cpu, hist_mem },
+            tick_ms: 0,
+        }
+    }
+
+    /// A snapshot for offline rendering (previews, full layouts built outside the service).
+    pub fn snapshot() -> Live {
+        Live { now: chrono::Local::now(), stats: Stats::default(), tick_ms: 0 }
+    }
+}
+
+// ---- GIF animation ----
+struct Gif {
+    mtime: Option<std::time::SystemTime>,
+    frames: Vec<(RgbaImage, u64)>, // picture, delay in ms
+    total_ms: u64,
+}
+
+const GIF_MAX_FRAMES: usize = 400;
+const GIF_MIN_DELAY_MS: u64 = 100; // the deck cannot take updates faster than this comfortably
+
+fn gif_cache() -> &'static Mutex<HashMap<(String, u32), Arc<Gif>>> {
+    static C: std::sync::OnceLock<Mutex<HashMap<(String, u32), Arc<Gif>>>> = std::sync::OnceLock::new();
+    C.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub fn is_gif(path: &str) -> bool {
+    path.to_ascii_lowercase().ends_with(".gif")
+}
+
+fn load_gif(full: &std::path::Path, w: u32) -> Result<Arc<Gif>, String> {
+    use image::AnimationDecoder;
+    let key = (full.display().to_string(), w);
+    let mtime = std::fs::metadata(full).and_then(|m| m.modified()).ok();
+    if let Some(g) = gif_cache().lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+        if g.mtime == mtime {
+            return Ok(g.clone());
+        }
+    }
+    let file = std::fs::File::open(full).map_err(|e| format!("gif {}: {e}", full.display()))?;
+    let dec = image::codecs::gif::GifDecoder::new(std::io::BufReader::new(file)).map_err(|e| format!("gif {}: {e}", full.display()))?;
+    let mut frames = Vec::new();
+    for f in dec.into_frames().take(GIF_MAX_FRAMES) {
+        let f = f.map_err(|e| format!("gif {}: {e}", full.display()))?;
+        let (n, d) = f.delay().numer_denom_ms();
+        let ms = if d == 0 { 100 } else { (n as u64 / d as u64).max(GIF_MIN_DELAY_MS) };
+        let img = image::imageops::resize(f.buffer(), w, ICON, FilterType::Triangle);
+        frames.push((img, ms));
+    }
+    if frames.is_empty() {
+        return Err(format!("gif {}: no frames", full.display()));
+    }
+    let total_ms = frames.iter().map(|f| f.1).sum();
+    let g = Arc::new(Gif { mtime, frames, total_ms });
+    gif_cache().lock().unwrap_or_else(|e| e.into_inner()).insert(key, g.clone());
+    Ok(g)
+}
+
+/// Frame index and how long it stays up (ms) for a GIF at animation time `tick_ms`.
+fn gif_at(g: &Gif, tick_ms: u64) -> (usize, u64) {
+    let mut t = tick_ms % g.total_ms;
+    for (i, (_, d)) in g.frames.iter().enumerate() {
+        if t < *d {
+            return (i, *d - t);
+        }
+        t -= *d;
+    }
+    (0, g.frames[0].1)
+}
+
+/// For an animated GIF button: the index of the frame shown at `tick_ms` (None = not an animation, or a single frame).
+pub fn gif_frame_index(b: &Button, cfg: &Config, wide: bool, tick_ms: u64) -> Option<usize> {
+    let path = b.icon.as_deref().filter(|p| is_gif(p) && !b.face.is_live())?;
+    let g = load_gif(&cfg.base_dir.join(path), if wide { WIDE_W } else { ICON }).ok()?;
+    (g.frames.len() > 1).then(|| gif_at(&g, tick_ms).0)
+}
+
+// ---- drawing helpers for live faces ----
+fn fill_rect(img: &mut RgbaImage, x0: i32, y0: i32, x1: i32, y1: i32, c: Rgba<u8>) {
+    for y in y0.max(0)..y1.min(img.height() as i32) {
+        for x in x0.max(0)..x1.min(img.width() as i32) {
+            img.put_pixel(x as u32, y as u32, c);
+        }
+    }
+}
+
+fn thick_line(img: &mut RgbaImage, a: (f32, f32), b: (f32, f32), c: Rgba<u8>) {
+    let steps = (b.0 - a.0).abs().max((b.1 - a.1).abs()).ceil().max(1.0) as i32;
+    for i in 0..=steps {
+        let t = i as f32 / steps as f32;
+        let (x, y) = (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t);
+        fill_rect(img, x as i32 - 1, y as i32 - 1, x as i32 + 1, y as i32 + 1, c);
+    }
+}
+
+/// Draw one line of text with its left edge at `x` and its vertical middle at `yc`.
+fn text_left(img: &mut RgbaImage, font: &FontVec, text: &str, size: f32, c: Rgba<u8>, x: f32, yc: f32) -> Result<(), String> {
+    let (glyphs, b) = layout_glyphs(font, text, size)?;
+    blit(img, font, glyphs, c, x - b[0], yc - (b[1] + b[3]) / 2.0);
+    Ok(())
+}
+
+fn blit(img: &mut RgbaImage, font: &FontVec, glyphs: Vec<Glyph>, c: Rgba<u8>, dx: f32, dy: f32) {
+    let (w, h) = img.dimensions();
+    for g in glyphs {
+        if let Some(o) = font.outline_glyph(g) {
+            let r = o.px_bounds();
+            o.draw(|x, y, cov| {
+                let (px, py) = ((r.min.x + x as f32 + dx) as i32, (r.min.y + y as f32 + dy) as i32);
+                if px >= 0 && py >= 0 && (px as u32) < w && (py as u32) < h {
+                    let p = img.get_pixel_mut(px as u32, py as u32);
+                    for i in 0..3 {
+                        p.0[i] = (p.0[i] as f32 * (1.0 - cov) + c.0[i] as f32 * cov) as u8;
+                    }
+                }
+            });
+        }
+    }
+}
+
+/// Draw (possibly multi-line) text centered on (cx, cy), shrinking it until it fits max_w x max_h.
+fn text_block(img: &mut RgbaImage, font: &FontVec, text: &str, c: Rgba<u8>, cx: f32, cy: f32, max_w: f32, max_h: f32, start: f32) -> Result<(), String> {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut size = start;
+    loop {
+        let mut laid = Vec::new();
+        let mut widest = 0.0f32;
+        for l in &lines {
+            if l.trim().is_empty() {
+                laid.push(None);
+                continue;
+            }
+            let (g, b) = layout_glyphs(font, l, size)?;
+            widest = widest.max(b[2] - b[0]);
+            laid.push(Some((g, b)));
+        }
+        let line_h = size * 1.1;
+        let total = line_h * lines.len() as f32;
+        if (widest <= max_w && total <= max_h) || size <= 8.0 {
+            for (i, item) in laid.into_iter().enumerate() {
+                if let Some((g, b)) = item {
+                    let yc = cy - total / 2.0 + line_h * (i as f32 + 0.5);
+                    blit(img, font, g, c, cx - (b[0] + b[2]) / 2.0, yc - (b[1] + b[3]) / 2.0);
+                }
+            }
+            return Ok(());
+        }
+        size *= 0.92;
+    }
+}
+
+fn need_font<'a>(font: Option<&'a FontVec>, b: &Button) -> Result<&'a FontVec, String> {
+    font.ok_or_else(|| format!("button {:?}: live faces need a readable glyph_font", b.pos))
+}
+
+fn colors(b: &Button) -> Result<(Rgba<u8>, Rgba<u8>), String> {
+    Ok((parse_color(b.color.as_deref().unwrap_or(EMPTY_COLOR))?, parse_color(b.glyph_color.as_deref().unwrap_or("#ffffff"))?))
+}
+
+fn render_live_clock(b: &Button, font: Option<&FontVec>, w: u32, live: &Live) -> Result<Vec<u8>, String> {
+    let font = need_font(font, b)?;
+    let (bg, fg) = colors(b)?;
+    let mut img = RgbaImage::from_pixel(w, ICON, bg);
+    let text = live.now.format(b.clock_format.as_deref().unwrap_or("%H:%M")).to_string();
+    text_block(&mut img, font, &text, fg, w as f32 / 2.0, 82.0, w as f32 - 24.0, 140.0, 130.0).map_err(|e| format!("button {:?}: {e}", b.pos))?;
+    png_bytes(&img)
+}
+
+fn render_live_stats(b: &Button, font: Option<&FontVec>, w: u32, live: &Live) -> Result<Vec<u8>, String> {
+    let font = need_font(font, b)?;
+    let (bg, fg) = colors(b)?;
+    let custom = b.glyph_color.is_some();
+    let cpu_c = if custom { fg } else { Rgba([0x58, 0xa6, 0xff, 255]) };
+    let mem_c = if custom { fg } else { Rgba([0xd2, 0x99, 0x22, 255]) };
+    let track = Rgba([bg.0[0].saturating_add(40), bg.0[1].saturating_add(40), bg.0[2].saturating_add(40), 255]);
+    let mut img = RgbaImage::from_pixel(w, ICON, bg);
+    let wf = w as f32;
+    let (cpu_t, mem_t) = (format!("CPU {:.0}%", live.stats.cpu), format!("RAM {:.0}%", live.stats.mem));
+    let err = |e: String| format!("button {:?}: {e}", b.pos);
+    match b.stats_style.as_deref().unwrap_or("bars") {
+        "text" => {
+            text_block(&mut img, font, &format!("{cpu_t}\n{mem_t}"), fg, wf / 2.0, 90.0, wf - 24.0, 150.0, 60.0).map_err(err)?;
+        }
+        "line" => {
+            text_left(&mut img, font, &cpu_t, 26.0, cpu_c, 14.0, 22.0).map_err(err)?;
+            text_left(&mut img, font, &mem_t, 26.0, mem_c, wf / 2.0 + 4.0, 22.0).map_err(err)?;
+            let (x0, x1, y0, y1) = (14.0f32, wf - 14.0, 46.0f32, 182.0f32);
+            for p in [0.0f32, 0.5, 1.0] {
+                let y = (y1 - (y1 - y0) * p) as i32;
+                fill_rect(&mut img, x0 as i32, y, x1 as i32, y + 1, track);
+            }
+            for (hist, c) in [(&live.stats.hist_cpu, cpu_c), (&live.stats.hist_mem, mem_c)] {
+                let n = 60usize;
+                let pts: Vec<(f32, f32)> = hist
+                    .iter()
+                    .rev()
+                    .take(n)
+                    .enumerate()
+                    .map(|(i, v)| (x1 - (x1 - x0) * i as f32 / (n - 1) as f32, y1 - (y1 - y0) * (v / 100.0).clamp(0.0, 1.0)))
+                    .collect();
+                for pair in pts.windows(2) {
+                    thick_line(&mut img, pair[0], pair[1], c);
+                }
+            }
+        }
+        _ => {
+            for (i, (t, v, c)) in [(&cpu_t, live.stats.cpu, cpu_c), (&mem_t, live.stats.mem, mem_c)].into_iter().enumerate() {
+                let top = 12.0 + i as f32 * 90.0;
+                text_left(&mut img, font, t, 34.0, fg, 14.0, top + 20.0).map_err(err)?;
+                let (x0, x1, y0) = (14, w as i32 - 14, top as i32 + 48);
+                fill_rect(&mut img, x0, y0, x1, y0 + 26, track);
+                fill_rect(&mut img, x0, y0, x0 + ((x1 - x0) as f32 * (v / 100.0).clamp(0.0, 1.0)) as i32, y0 + 26, c);
+            }
+        }
+    }
+    png_bytes(&img)
+}
 
 const ICON: u32 = 196;
 const WIDE_W: u32 = 458;
@@ -101,7 +338,19 @@ fn cell_width(col: u8, row: u8) -> u32 {
     if (col, row) == (3, 2) { WIDE_W } else { ICON }
 }
 
-fn render_icon(b: Option<&Button>, cfg: &Config, font: Option<&FontVec>, w: u32) -> Result<Vec<u8>, String> {
+fn render_icon(b: Option<&Button>, cfg: &Config, font: Option<&FontVec>, w: u32, live: &Live) -> Result<Vec<u8>, String> {
+    if let Some(b) = b {
+        match b.face {
+            Face::LiveClock => return render_live_clock(b, font, w, live),
+            Face::LiveStats => return render_live_stats(b, font, w, live),
+            _ => {}
+        }
+        if let Some(path) = b.icon.as_deref().filter(|p| is_gif(p)) {
+            // animated: show the frame for the current animation time
+            let g = load_gif(&cfg.base_dir.join(path), w)?;
+            return png_bytes(&g.frames[gif_at(&g, live.tick_ms).0].0);
+        }
+    }
     if let Some(path) = b.and_then(|b| b.icon.as_deref()) {
         let full = cfg.base_dir.join(path);
         let img = image::open(&full).map_err(|e| format!("icon {}: {e}", full.display()))?;
@@ -118,12 +367,22 @@ fn render_icon(b: Option<&Button>, cfg: &Config, font: Option<&FontVec>, w: u32)
     png_bytes(&img)
 }
 
-fn load_font(cfg: &Config) -> Result<Option<FontVec>, String> {
-    if !cfg.buttons.iter().any(|b| b.glyph.is_some()) {
+/// The glyph font, read once and cached (live faces redraw every second or so).
+fn load_font(cfg: &Config) -> Result<Option<Arc<FontVec>>, String> {
+    if !cfg.buttons.iter().any(|b| b.glyph.is_some() || b.face.is_live()) {
         return Ok(None);
     }
+    static CACHE: Mutex<Option<(String, Arc<FontVec>)>> = Mutex::new(None);
+    let mut c = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((path, f)) = c.as_ref() {
+        if *path == cfg.glyph_font {
+            return Ok(Some(f.clone()));
+        }
+    }
     let bytes = std::fs::read(&cfg.glyph_font).map_err(|e| format!("glyph_font {}: {e}", cfg.glyph_font))?;
-    FontVec::try_from_vec(bytes).map(Some).map_err(|e| format!("glyph_font {}: {e}", cfg.glyph_font))
+    let f = Arc::new(FontVec::try_from_vec(bytes).map_err(|e| format!("glyph_font {}: {e}", cfg.glyph_font))?);
+    *c = Some((cfg.glyph_font.clone(), f.clone()));
+    Ok(Some(f))
 }
 
 /// Paint a colored rim (border) of `width` px, fading inward, onto a rendered tile.
@@ -154,10 +413,10 @@ fn draw_rim(img: &mut RgbaImage, rgb: [u8; 3], width: u32, radius: u32) {
 /// A one-cell update (for command 0x000D): same ZIP layout as the stock app's partial updates.
 /// With `rim` the tile gets a colored border; with `None` it is the normal tile (identical to the full layout's image,
 /// so it has the same hashed filename).
-pub fn cell_zip(cfg: &Config, page: u8, col: u8, row: u8, rim: Option<([u8; 3], u32, u32)>) -> Result<Vec<u8>, String> {
+pub fn cell_zip(cfg: &Config, page: u8, col: u8, row: u8, rim: Option<([u8; 3], u32, u32)>, live: &Live) -> Result<Vec<u8>, String> {
     let glyph_font = load_font(cfg)?;
     let b = cfg.button_at(page, col, row);
-    let mut png = render_icon(b, cfg, glyph_font.as_ref(), cell_width(col, row))?;
+    let mut png = render_icon(b, cfg, glyph_font.as_deref(), cell_width(col, row), live)?;
     if let Some((rgb, width, radius)) = rim {
         let mut img = image::load_from_memory(&png).map_err(|e| e.to_string())?.to_rgba8();
         draw_rim(&mut img, rgb, width, radius);
@@ -183,6 +442,11 @@ pub fn cell_zip(cfg: &Config, page: u8, col: u8, row: u8, rim: Option<([u8; 3], 
 
 /// Full layout: every cell is described so the deck never shows stale content.
 pub fn build_zip(cfg: &Config, page: u8) -> Result<Vec<u8>, String> {
+    build_zip_live(cfg, page, &Live::snapshot())
+}
+
+/// Full layout with the live faces / GIF frames drawn for `live`.
+pub fn build_zip_live(cfg: &Config, page: u8, live: &Live) -> Result<Vec<u8>, String> {
     let glyph_font = load_font(cfg)?;
     let mut manifest = serde_json::Map::new();
     let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
@@ -204,14 +468,15 @@ pub fn build_zip(cfg: &Config, page: u8) -> Result<Vec<u8>, String> {
             }
             let key = format!("{col}_{row}");
             let b = cfg.button_at(page, col, row);
-            if row == 2 && col == 3 && b.is_none_or(|b| b.keep_clock) {
-                // no button on the wide slot, or one that keeps the clock: the firmware clock stays on screen
-                manifest.insert(key, json!({"SmallViewMode":1,"State":0,"ViewParam":[{"Font":font(),"Text":""}]}));
+            if row == 2 && col == 3 && b.is_none_or(|b| b.face.is_firmware()) {
+                // no button on the wide slot, or one that hands it to the firmware: clock (mode 1) or stats (mode 0), no picture
+                let mode = if b.is_some_and(|b| b.face == Face::Stats) { 0 } else { 1 };
+                manifest.insert(key, json!({"SmallViewMode":mode,"State":0,"ViewParam":[{"Font":font(),"Text":""}]}));
                 continue;
             }
             // The deck keeps the first image it unpacked under a given name and ignores later ones, so the
             // filename must change whenever the picture does (the stock app uses a fresh uuid each time).
-            let png = render_icon(b, cfg, glyph_font.as_ref(), cell_width(col, row))?;
+            let png = render_icon(b, cfg, glyph_font.as_deref(), cell_width(col, row), live)?;
             let name = format!("Images/{col}_{row}_{:016x}.png", fnv1a(&png));
             zip.start_file(&name, opts).map_err(|e| e.to_string())?;
             zip.write_all(&png).map_err(|e| e.to_string())?;
