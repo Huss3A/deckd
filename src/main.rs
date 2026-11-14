@@ -74,7 +74,7 @@ fn with_deck<T>(f: impl FnOnce(&HidDevice) -> Result<T, String>) -> Result<T, St
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let arg = |i: usize| args.get(i).map(String::as_str);
-    let config_path = |i: usize| PathBuf::from(arg(i).unwrap_or("deck.toml"));
+    let config_path = |i: usize| arg(i).map(PathBuf::from).unwrap_or_else(config::default_path);
     let secs = |i: usize, default: u64| arg(i).and_then(|s| s.parse().ok()).unwrap_or(default);
 
     if let Some(c) = arg(0).filter(|c| agent::COMMANDS.contains(c)) {

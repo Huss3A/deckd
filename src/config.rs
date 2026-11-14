@@ -86,6 +86,26 @@ impl Default for Feedback {
 }
 
 /// "#rrggbb" -> [r, g, b]
+/// The one config file every command uses when no path is given: `%APPDATA%\deckd\deck.toml`, so it no longer depends on the
+/// folder deckd was launched from. The first time, an existing `deck.toml` next to the exe (else in the current folder) is
+/// copied there. Falls back to `deck.toml` in the current folder if there is no %APPDATA%.
+pub fn default_path() -> PathBuf {
+    let Some(dir) = std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("deckd")) else {
+        return PathBuf::from("deck.toml");
+    };
+    let target = dir.join("deck.toml");
+    if !target.exists() {
+        let beside_exe = std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.join("deck.toml")));
+        let seed = beside_exe.into_iter().chain(std::iter::once(PathBuf::from("deck.toml"))).find(|p| p.exists());
+        if let Some(seed) = seed {
+            if std::fs::create_dir_all(&dir).is_ok() && std::fs::copy(&seed, &target).is_ok() {
+                eprintln!("deckd: config now lives at {} (copied from {})", target.display(), seed.display());
+            }
+        }
+    }
+    target
+}
+
 pub fn parse_hex(s: &str) -> Option<[u8; 3]> {
     let h = s.trim().trim_start_matches('#');
     (h.len() == 6).then(|| u32::from_str_radix(h, 16).ok()).flatten().map(|v| [(v >> 16) as u8, (v >> 8) as u8, v as u8])

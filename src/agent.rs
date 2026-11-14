@@ -67,7 +67,7 @@ impl Args {
 }
 
 fn config_path(a: &Args) -> PathBuf {
-    PathBuf::from(a.get("config").unwrap_or("deck.toml"))
+    a.get("config").map(PathBuf::from).unwrap_or_else(crate::config::default_path)
 }
 
 fn load(a: &Args) -> Result<Config, CliError> {
