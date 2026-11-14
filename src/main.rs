@@ -20,6 +20,7 @@ mod agent;
 mod audio;
 mod config;
 mod gui;
+mod icon;
 mod layout;
 mod macro_ui;
 mod protocol;

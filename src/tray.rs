@@ -28,32 +28,7 @@ fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-/// 32x32 RGBA of the app icon: a dark rounded square with a grid of colored keys. Used for the tray and the window.
-pub fn icon_rgba(size: u32) -> Vec<u8> {
-    let mut px = vec![0u8; (size * size * 4) as usize];
-    let s = size as f32;
-    let colors = [[0x4c, 0x9a, 0xff], [0xff, 0x9f, 0x43], [0x5f, 0xd3, 0x8d], [0xb5, 0x7b, 0xff], [0xff, 0x5f, 0x7a], [0x4c, 0xd4, 0xe0]];
-    for y in 0..size {
-        for x in 0..size {
-            let (fx, fy) = ((x as f32 + 0.5) / s, (y as f32 + 0.5) / s);
-            // rounded square
-            let (dx, dy) = ((fx - 0.5).abs() - 0.5 + 0.18, (fy - 0.5).abs() - 0.5 + 0.18);
-            let outside = dx.max(0.0).hypot(dy.max(0.0)) - 0.18;
-            if outside > 0.0 {
-                continue;
-            }
-            let mut c = [0x1c, 0x1f, 0x26];
-            // 3x2 grid of keys
-            let (gx, gy) = ((fx - 0.14) / 0.72 * 3.0, (fy - 0.25) / 0.5 * 2.0);
-            if (0.0..3.0).contains(&gx) && (0.0..2.0).contains(&gy) && gx.fract() > 0.12 && gx.fract() < 0.88 && gy.fract() > 0.14 && gy.fract() < 0.86 {
-                c = colors[(gy as usize) * 3 + gx as usize];
-            }
-            let i = ((y * size + x) * 4) as usize;
-            px[i..i + 4].copy_from_slice(&[c[0], c[1], c[2], 255]);
-        }
-    }
-    px
-}
+pub use crate::icon::icon_rgba;
 
 fn make_icon() -> windows_sys::Win32::UI::WindowsAndMessaging::HICON {
     let rgba = icon_rgba(32);
