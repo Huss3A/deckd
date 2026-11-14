@@ -114,6 +114,42 @@ struct Key {
     tier_shown: Option<u16>,
 }
 
+/// The wide slot (button 13) does not report like the normal buttons (decoded 2026-11-14, see NOTES.md): a short tap arrives as a
+/// burst of quick down/up pairs with stepping state bytes (c8, c9, ca, ...), a long press as one down (c8) and one up with state 01.
+/// This turns that into plain press/release events: a burst (events less than WIDE_GAP apart) counts as one press, released at its
+/// first "up"; a long press is released by the up that carries state 01.
+#[derive(Default)]
+struct WideFilter {
+    last: Option<Instant>,
+    in_press: bool,
+}
+
+const WIDE_GAP: Duration = Duration::from_millis(700);
+
+impl WideFilter {
+    /// Normal buttons: only state 01 counts. Index 13: collapse bursts. Returns whether the event should be handled.
+    fn accept(&mut self, index: u8, state: u8, pressed: bool) -> bool {
+        if index != 13 {
+            return state == 0x01;
+        }
+        let gap_ok = self.last.is_none_or(|t| t.elapsed() >= WIDE_GAP);
+        self.last = Some(Instant::now());
+        if pressed {
+            if gap_ok {
+                self.in_press = true;
+                return true; // start of a new press
+            }
+            false // later pair of the same burst
+        } else if self.in_press {
+            // the first "up" ends the press: a short tap ends here; a long press ends with state 01 after its real duration
+            self.in_press = false;
+            true
+        } else {
+            false
+        }
+    }
+}
+
 /// Runs an action. Returns the new page when it was a page switch.
 fn run_action(action: &Action, page: u8, cfg: &Config, ctx: &Ctx) -> Option<u8> {
     if let Action::Page { to } = action {
@@ -225,24 +261,25 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
         let mut last_beat = Instant::now();
         let mut last_check = Instant::now();
         let mut last_press = [Instant::now() - DEBOUNCE; 16];
-        let mut keys = [Key::default(); 13];
+        let mut keys = [Key::default(); 14];
+        let mut wide = WideFilter::default();
         let mut switch: Option<u8> = None;
         let mut glow_q: GlowQueue = Vec::new();
-        let mut glow_until: [Option<Instant>; 13] = [None; 13];
+        let mut glow_until: [Option<Instant>; 14] =[None; 14];
         let mut buf = [0u8; PACKET + 1];
         loop {
             if let Some(p) = switch.take() {
                 if p != page {
                     page = p;
-                    keys = [Key::default(); 13];
-                    glow_until = [None; 13]; // the full upload below redraws every tile
+                    keys = [Key::default(); 14];
+                    glow_until = [None; 14]; // the full upload below redraws every tile
                     glow_q.clear();
                     ctx.with(|s| s.page = page);
                     upload_layout(&dev, cfg, page, ctx)?;
                 }
             }
             if last_beat.elapsed() >= HEARTBEAT_EVERY {
-                protocol::heartbeat(&dev)?;
+                protocol::heartbeat_mode(&dev, if cfg.button_at(page, 3, 2).is_some() { 2 } else { 1 })?;
                 last_beat = Instant::now();
             }
             if last_check.elapsed() >= Duration::from_secs(1) {
@@ -259,7 +296,7 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                             }
                             ctx.with(|s| s.config_error = None);
                             ctx.log("config reloaded");
-                            glow_until = [None; 13];
+                            glow_until = [None; 14];
                             glow_q.clear();
                             protocol::send(&dev, cmd::BRIGHTNESS, cfg.brightness.min(100).to_string().as_bytes())?;
                             upload_layout(&dev, cfg, page, ctx)?;
@@ -272,7 +309,7 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                 }
             }
             // timers: hold threshold reached, or the double-tap window ran out
-            for i in 0..13usize {
+            for i in 0..14usize {
                 let b = cfg.button_for_index(page, i as u8);
                 // repeat while held: starts after REPEAT_DELAY_MS, then every repeat_ms, until release (or the safety limit)
                 if let (Some(d), Some(rep)) = (keys[i].down, b.and_then(|b| b.repeat.as_ref())) {
@@ -324,7 +361,7 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
             let requests: Vec<(u8, Glow)> = glow_q.drain(..).collect();
             for (idx, g) in requests {
                 let fb = &cfg.feedback;
-                if !fb.enabled || idx as usize >= 13 {
+                if !fb.enabled || idx as usize >= 14 {
                     continue;
                 }
                 let btn = cfg.button_for_index(page, idx);
@@ -348,7 +385,7 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                     Err(e) => ctx.log(format!("glow failed: {e}")),
                 }
             }
-            for i in 0..13usize {
+            for i in 0..14usize {
                 if glow_until[i].is_some_and(|t| Instant::now() >= t) {
                     // same reason as above: never block the loop with a restore while the button is mid-press
                     // (a live hold/repeat rim is restored on release instead)
@@ -364,7 +401,7 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
             match dev.read(&mut buf).map_err(|e| format!("read error: {e}"))? {
                 0 => std::thread::sleep(Duration::from_millis(10)),
                 n => match protocol::parse(&buf[..n]) {
-                    Some(Event::Button { index, state: 0x01, pressed }) if (index as usize) < 13 => {
+                    Some(Event::Button { index, state, pressed }) if (index as usize) < 14 && wide.accept(index, state, pressed) => {
                         let i = index as usize;
                         let b = cfg.button_for_index(page, index);
                         let (has_double, has_hold) = (b.is_some_and(|b| b.double.is_some()), b.is_some_and(|b| !b.holds.is_empty()));
@@ -419,7 +456,7 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                     }
                     Some(Event::Other { cmd: cmd::CONFIG_REQUESTED, .. }) => {
                         ctx.log("deck asked for its layout again");
-                        glow_until = [None; 13];
+                        glow_until = [None; 14];
                         upload_layout(&dev, cfg, page, ctx)?;
                     }
                     _ => {}

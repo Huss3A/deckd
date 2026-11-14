@@ -55,6 +55,13 @@ Status key: **[verified]** = tested on my unit (own client or captured from Ulan
 - The stock app also starts the ZIP with an explicit `Images/` directory entry; we keep it (not proven necessary).
 - Our own PNGs (plain `Images/sigma.png` names or uuid names) display fine; only the container mattered.
 
+## Wide slot as a button (built 2026-11-14, NOT yet tried on the deck)
+- Config pos `"3,2"` is the wide slot (`"4,2"` is rejected). With no button there, the layout keeps the firmware clock (`SmallViewMode` 1,
+  heartbeat mode 1). With a button, the cell is `{"SmallViewMode":2, ..., "Icon": <458x196 png>}` and the heartbeat's first field is 2.
+  Both come from community docs only; if the deck shows nothing / a broken slot, that is the first suspect.
+- Events: `service::WideFilter` collapses the firmware's tap bursts into one press/release (see the decode above). A double tap on the
+  wide slot may not work: the burst lasts ~0.9 s and the filter ignores presses within 0.7 s of the last event. Test and adjust.
+
 ## Wide slot (button 13, manifest cell `3_2`) **[doc, not yet tested on my deck]**
 - From racerxdl/ulanzi-d200-linux: the wide slot is a **458 x 196 px** area. Modes: 1 = firmware clock (default),
   2 = background image (host sends a 458x196 PNG into the slot with a partial update `0x000D`, cell `3_2`, normal `Icon`),

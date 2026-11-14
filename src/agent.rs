@@ -303,14 +303,14 @@ pub fn run(cmd: &str, raw: &[String]) -> Result<(), CliError> {
                     files.push(path.display().to_string());
                 }
             }
-            json!({"out": dir.display().to_string(), "files": files, "note": "<out>/page<N>/<col>_<row>_<hash>.png, 196x196"})
+            json!({"out": dir.display().to_string(), "files": files, "note": "<out>/page<N>/<col>_<row>_<hash>.png, 196x196 (the wide slot 3_2 is 458x196)"})
         }
         "press" => {
             let s = a.pos.first().ok_or_else(|| usage("usage: press <col,row|index> [--execute]"))?;
             let cfg = load(&a)?;
             let (c, r) = match s.parse::<u8>() {
-                Ok(i) if i <= 12 => (i % 5, i / 5),
-                Ok(_) => return Err(usage("index must be 0-12 (13 is the wide slot, which has no action)")),
+                Ok(i) if i <= 13 => (i % 5, i / 5), // 13 = the wide slot, cell 3,2
+                Ok(_) => return Err(usage("index must be 0-13 (13 is the wide slot, 3,2)")),
                 Err(_) => cell_arg(&a)?,
             };
             let page = page_arg(&a)?;

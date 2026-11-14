@@ -71,7 +71,17 @@ struct App {
 }
 
 fn valid_cell(c: i32, r: i32) -> bool {
-    (0..COLS as i32).contains(&c) && (0..ROWS as i32).contains(&r) && !(r == 2 && c >= 3)
+    (0..COLS as i32).contains(&c) && (0..ROWS as i32).contains(&r)
+}
+
+/// The wide slot spans (3,2) and (4,2); both map to its cell (3,2).
+fn norm_cell(c: i32, r: i32) -> Option<(u8, u8)> {
+    valid_cell(c, r).then(|| if (c, r) == (4, 2) { (3, 2) } else { (c as u8, r as u8) })
+}
+
+/// Tile width: the wide slot is two tiles plus the gap.
+fn tile_width(col: u8, row: u8) -> f32 {
+    if (col, row) == (3, 2) { 2.0 * TILE + GAP } else { TILE }
 }
 
 impl App {
@@ -140,7 +150,7 @@ impl App {
     fn draw_tile(&mut self, ui: &mut egui::Ui, col: u8, row: u8, pressed: bool) {
         let rect = Rect::from_min_size(
             ui.min_rect().min + Vec2::new(col as f32 * (TILE + GAP), row as f32 * (TILE + GAP)),
-            Vec2::splat(TILE),
+            Vec2::new(tile_width(col, row), TILE),
         );
         let resp = ui.interact(rect, ui.scope_id().with(("tile", col, row)), Sense::click_and_drag());
         if resp.clicked() || resp.drag_started() {
@@ -156,8 +166,8 @@ impl App {
             if let Some(p) = pointer {
                 let origin = rect.min - Vec2::new(col as f32 * (TILE + GAP), row as f32 * (TILE + GAP));
                 let (tc, tr) = (((p.x - origin.x) / (TILE + GAP)).floor() as i32, ((p.y - origin.y) / (TILE + GAP)).floor() as i32);
-                if valid_cell(tc, tr) {
-                    self.swap_cells((col, row), (tc as u8, tr as u8));
+                if let Some(t) = norm_cell(tc, tr) {
+                    self.swap_cells((col, row), t);
                 }
             }
         }
@@ -186,6 +196,9 @@ impl App {
             1.0
         };
         paint_tile(ui.painter(), rect, b.as_ref(), tex.as_ref(), alpha);
+        if (col, row) == (3, 2) && b.is_none() {
+            ui.painter().text(rect.center(), Align2::CENTER_CENTER, "wide slot: firmware clock\n(click to set up a button)", FontId::proportional(12.0), Color32::GRAY);
+        }
 
         let is_target = swapping.is_some_and(|(_, h)| h == (col, row) || (is_source && shown != (col, row)));
         let selected = self.selected == Some((col, row));
@@ -208,7 +221,7 @@ impl App {
             if let Some(p) = pointer {
                 let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("drag_ghost"));
                 let painter = ui.ctx().layer_painter(layer);
-                let r = Rect::from_center_size(p, Vec2::splat(TILE));
+                let r = Rect::from_center_size(p, Vec2::new(tile_width(col, row), TILE));
                 paint_tile(&painter, r, own.as_ref(), own_tex.as_ref(), 0.6);
                 painter.rect_stroke(r, 8.0, Stroke::new(2.0, Color32::from_rgba_unmultiplied(255, 255, 255, 150)), StrokeKind::Inside);
             }
@@ -225,28 +238,19 @@ impl App {
         self.drag_hover = match (self.drag, ui.ctx().pointer_interact_pos()) {
             (Some(_), Some(p)) => {
                 let (c, r) = (((p.x - outer.min.x) / (TILE + GAP)).floor() as i32, ((p.y - outer.min.y) / (TILE + GAP)).floor() as i32);
-                valid_cell(c, r).then_some((c as u8, r as u8))
+                norm_cell(c, r)
             }
             _ => None,
         };
         for row in 0..ROWS {
             for col in 0..COLS {
-                if row == 2 && col >= 3 {
-                    continue;
+                if row == 2 && col == 4 {
+                    continue; // covered by the wide slot, drawn as the tile at (3,2)
                 }
                 let flashing = pressed.map(|(i, _)| i == row * COLS + col).unwrap_or(false);
                 self.draw_tile(&mut inner, col, row, flashing);
             }
         }
-        // the wide clock slot (also button 13 on the deck)
-        let clock = Rect::from_min_size(
-            outer.min + Vec2::new(3.0 * (TILE + GAP), 2.0 * (TILE + GAP)),
-            Vec2::new(2.0 * TILE + GAP, TILE),
-        );
-        let flash = pressed.map(|(i, _)| i == 13).unwrap_or(false);
-        ui.painter().rect_filled(clock, 8.0, Color32::from_gray(16));
-        ui.painter().rect_stroke(clock, 8.0, Stroke::new(if flash { 3.0 } else { 1.0 }, if flash { Color32::YELLOW } else { Color32::from_gray(70) }), StrokeKind::Inside);
-        ui.painter().text(clock.center(), Align2::CENTER_CENTER, "clock", FontId::proportional(14.0), Color32::GRAY);
     }
 
     /// Editor for one action slot (press / double tap / hold). `slot` identifies it for hotkey recording.

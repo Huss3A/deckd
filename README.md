@@ -53,7 +53,8 @@ compete for it: run only one at a time.
 
 ## Config (`deck.toml`)
 
-Buttons are addressed `"col,row"` (cols 0-4, rows 0-2; row 2 has only cols 0-2, the rest is the wide clock slot).
+Buttons are addressed `"col,row"` (cols 0-4, rows 0-2; row 2 has cols 0-2, and `"3,2"` is the wide slot, a 458x196 button; with
+no button there it shows the firmware clock. Wide-slot support is built but not yet tried on the deck).
 Button number reported by the deck = `row*5 + col`. See `deck.sample.toml` for every option.
 
 ```toml

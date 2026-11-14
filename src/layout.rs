@@ -8,6 +8,7 @@ use std::io::{Cursor, Write};
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
 const ICON: u32 = 196;
+const WIDE_W: u32 = 458;
 const EMPTY_COLOR: &str = "#202020";
 
 /// FNV-1a 64-bit: a stable content hash for filenames (not for security).
@@ -69,20 +70,21 @@ fn layout_glyphs(font: &FontVec, text: &str, size: f32) -> Result<(Vec<Glyph>, [
 
 /// Draw `text` centered in the area above the label line, shrinking it if it is too wide.
 fn draw_glyph(img: &mut RgbaImage, font: &FontVec, text: &str, color: Rgba<u8>) -> Result<(), String> {
-    let (mut size, max_w) = (110.0f32, 160.0f32);
+    let w = img.width();
+    let (mut size, max_w) = (110.0f32, w as f32 - 36.0); // 160 on a normal tile
     let (mut glyphs, mut b) = layout_glyphs(font, text, size)?;
     if b[2] - b[0] > max_w {
         size *= max_w / (b[2] - b[0]);
         (glyphs, b) = layout_glyphs(font, text, size)?;
     }
-    let dx = ICON as f32 / 2.0 - (b[0] + b[2]) / 2.0;
+    let dx = w as f32 / 2.0 - (b[0] + b[2]) / 2.0;
     let dy = 78.0 - (b[1] + b[3]) / 2.0; // label text sits along the bottom
     for g in glyphs {
         if let Some(o) = font.outline_glyph(g) {
             let r = o.px_bounds();
             o.draw(|x, y, cov| {
                 let (px, py) = ((r.min.x + x as f32 + dx) as i32, (r.min.y + y as f32 + dy) as i32);
-                if px >= 0 && py >= 0 && (px as u32) < ICON && (py as u32) < ICON {
+                if px >= 0 && py >= 0 && (px as u32) < w && (py as u32) < ICON {
                     let p = img.get_pixel_mut(px as u32, py as u32);
                     for i in 0..3 {
                         p.0[i] = (p.0[i] as f32 * (1.0 - cov) + color.0[i] as f32 * cov) as u8;
@@ -94,14 +96,19 @@ fn draw_glyph(img: &mut RgbaImage, font: &FontVec, text: &str, color: Rgba<u8>) 
     Ok(())
 }
 
-fn render_icon(b: Option<&Button>, cfg: &Config, font: Option<&FontVec>) -> Result<Vec<u8>, String> {
+/// Picture width for a cell: the wide slot (3,2) is 458 px wide, every other cell 196.
+fn cell_width(col: u8, row: u8) -> u32 {
+    if (col, row) == (3, 2) { WIDE_W } else { ICON }
+}
+
+fn render_icon(b: Option<&Button>, cfg: &Config, font: Option<&FontVec>, w: u32) -> Result<Vec<u8>, String> {
     if let Some(path) = b.and_then(|b| b.icon.as_deref()) {
         let full = cfg.base_dir.join(path);
         let img = image::open(&full).map_err(|e| format!("icon {}: {e}", full.display()))?;
-        return png_bytes(&img.resize_exact(ICON, ICON, FilterType::Lanczos3).to_rgba8());
+        return png_bytes(&img.resize_exact(w, ICON, FilterType::Lanczos3).to_rgba8());
     }
     let color = parse_color(b.and_then(|b| b.color.as_deref()).unwrap_or(EMPTY_COLOR))?;
-    let mut img = RgbaImage::from_pixel(ICON, ICON, color);
+    let mut img = RgbaImage::from_pixel(w, ICON, color);
     if let (Some(b), Some(font)) = (b, font) {
         if let Some(glyph) = b.glyph.as_deref() {
             let gc = parse_color(b.glyph_color.as_deref().unwrap_or("#ffffff"))?;
@@ -150,7 +157,7 @@ fn draw_rim(img: &mut RgbaImage, rgb: [u8; 3], width: u32, radius: u32) {
 pub fn cell_zip(cfg: &Config, page: u8, col: u8, row: u8, rim: Option<([u8; 3], u32, u32)>) -> Result<Vec<u8>, String> {
     let glyph_font = load_font(cfg)?;
     let b = cfg.button_at(page, col, row);
-    let mut png = render_icon(b, cfg, glyph_font.as_ref())?;
+    let mut png = render_icon(b, cfg, glyph_font.as_ref(), cell_width(col, row))?;
     if let Some((rgb, width, radius)) = rim {
         let mut img = image::load_from_memory(&png).map_err(|e| e.to_string())?.to_rgba8();
         draw_rim(&mut img, rgb, width, radius);
@@ -164,7 +171,11 @@ pub fn cell_zip(cfg: &Config, page: u8, col: u8, row: u8, rim: Option<([u8; 3], 
     zip.start_file(&name, opts).map_err(|e| e.to_string())?;
     zip.write_all(&png).map_err(|e| e.to_string())?;
     let text = b.and_then(|b| b.label.as_deref()).unwrap_or("");
-    let manifest = json!({ format!("{col}_{row}"): {"State":0,"ViewParam":[{"Font":font(),"Icon":name,"Text":text}]} });
+    let mut cell = json!({"State":0,"ViewParam":[{"Font":font(),"Icon":name,"Text":text}]});
+    if (col, row) == (3, 2) {
+        cell["SmallViewMode"] = json!(2); // the wide slot shows our picture instead of the firmware clock
+    }
+    let manifest = json!({ format!("{col}_{row}"): cell });
     zip.start_file("manifest.json", opts).map_err(|e| e.to_string())?;
     zip.write_all(serde_json::to_string(&manifest).map_err(|e| e.to_string())?.as_bytes()).map_err(|e| e.to_string())?;
     Ok(zip.finish().map_err(|e| e.to_string())?.into_inner())
@@ -192,19 +203,24 @@ pub fn build_zip(cfg: &Config, page: u8) -> Result<Vec<u8>, String> {
                 continue; // covered by the wide clock slot
             }
             let key = format!("{col}_{row}");
-            if row == 2 && col == 3 {
+            let b = cfg.button_at(page, col, row);
+            if row == 2 && col == 3 && b.is_none() {
+                // no button on the wide slot: keep the firmware clock
                 manifest.insert(key, json!({"SmallViewMode":1,"State":0,"ViewParam":[{"Font":font(),"Text":""}]}));
                 continue;
             }
-            let b = cfg.button_at(page, col, row);
             // The deck keeps the first image it unpacked under a given name and ignores later ones, so the
             // filename must change whenever the picture does (the stock app uses a fresh uuid each time).
-            let png = render_icon(b, cfg, glyph_font.as_ref())?;
+            let png = render_icon(b, cfg, glyph_font.as_ref(), cell_width(col, row))?;
             let name = format!("Images/{col}_{row}_{:016x}.png", fnv1a(&png));
             zip.start_file(&name, opts).map_err(|e| e.to_string())?;
             zip.write_all(&png).map_err(|e| e.to_string())?;
             let text = b.and_then(|b| b.label.as_deref()).unwrap_or("");
-            manifest.insert(key, json!({"State":0,"ViewParam":[{"Font":font(),"Icon":name,"Text":text}]}));
+            let mut cell = json!({"State":0,"ViewParam":[{"Font":font(),"Icon":name,"Text":text}]});
+            if row == 2 && col == 3 {
+                cell["SmallViewMode"] = json!(2); // wide slot with our own picture (community docs: mode 2 = background image)
+            }
+            manifest.insert(key, cell);
         }
     }
     zip.start_file("manifest.json", opts).map_err(|e| e.to_string())?;

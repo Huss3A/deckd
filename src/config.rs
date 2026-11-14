@@ -360,10 +360,10 @@ impl Button {
 
     /// (col, row), validated against what the hardware has.
     pub fn cell(&self) -> Result<(u8, u8), String> {
-        let bad = || format!("bad pos {:?}: use \"col,row\" (col 0-4, row 0-2; row 2 only cols 0-2)", self.pos);
+        let bad = || format!("bad pos {:?}: use \"col,row\" (col 0-4, row 0-2; row 2 has cols 0-2 plus \"3,2\" = the wide slot)", self.pos);
         let (c, r) = self.pos.split_once(',').ok_or_else(bad)?;
         let (c, r): (u8, u8) = (c.trim().parse().map_err(|_| bad())?, r.trim().parse().map_err(|_| bad())?);
-        if c >= COLS || r >= ROWS || (r == 2 && c >= 3) {
+        if c >= COLS || r >= ROWS || (r == 2 && c >= 4) {
             return Err(bad());
         }
         Ok((c, r))
