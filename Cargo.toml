@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 ab_glyph = "0.2.32"
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
-eframe = { version = "0.37.0", default-features = false, features = ["glow", "default_fonts"] }
+eframe = { version = "0.37.0", default-features = false, features = ["glow", "default_fonts", "clipboard"] }
 hidapi = { version = "2.6.7", default-features = false }
 image = { version = "0.25.10", default-features = false, features = ["png", "gif"] }
 rfd = "0.18.0"
