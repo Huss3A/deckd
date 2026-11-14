@@ -1,0 +1,282 @@
+1.274 W 0x0006 len=24 ascii="1|12|56|16:31:23|20|12H|" hex=31 7c 31 32 7c 35 36 7c 31 36 3a 33 31 3a 32 33 7c 32 30 7c 31 32 48 7c
+1.277 W 0x000a len=2 ascii="86" hex=38 36
+1.277 W 0x001a len=1 ascii="0" hex=30
+6.274 W 0x0006 len=24 ascii="1|20|56|16:31:29|23|12H|" hex=31 7c 32 30 7c 35 36 7c 31 36 3a 33 31 3a 32 39 7c 32 33 7c 31 32 48 7c
+11.276 W 0x0006 len=24 ascii="1|12|56|16:31:33|23|12H|" hex=31 7c 31 32 7c 35 36 7c 31 36 3a 33 31 3a 33 33 7c 32 33 7c 31 32 48 7c
+16.278 W 0x0006 len=24 ascii="1|12|56|16:31:39|16|12H|" hex=31 7c 31 32 7c 35 36 7c 31 36 3a 33 31 3a 33 39 7c 31 36 7c 31 32 48 7c
+21.280 W 0x0006 len=24 ascii="1|17|56|16:31:43|19|12H|" hex=31 7c 31 37 7c 35 36 7c 31 36 3a 33 31 3a 34 33 7c 31 39 7c 31 32 48 7c
+26.281 W 0x0006 len=23 ascii="1|8|56|16:31:49|17|12H|" hex=31 7c 38 7c 35 36 7c 31 36 3a 33 31 3a 34 39 7c 31 37 7c 31 32 48 7c
+31.282 W 0x0006 len=23 ascii="1|9|56|16:31:53|17|12H|" hex=31 7c 39 7c 35 36 7c 31 36 3a 33 31 3a 35 33 7c 31 37 7c 31 32 48 7c
+36.282 W 0x0006 len=23 ascii="1|8|56|16:31:59|19|12H|" hex=31 7c 38 7c 35 36 7c 31 36 3a 33 31 3a 35 39 7c 31 39 7c 31 32 48 7c
+41.283 W 0x0006 len=23 ascii="1|8|56|16:32:03|21|12H|" hex=31 7c 38 7c 35 36 7c 31 36 3a 33 32 3a 30 33 7c 32 31 7c 31 32 48 7c
+46.283 W 0x0006 len=24 ascii="1|14|56|16:32:09|23|12H|" hex=31 7c 31 34 7c 35 36 7c 31 36 3a 33 32 3a 30 39 7c 32 33 7c 31 32 48 7c
+51.286 W 0x0006 len=24 ascii="1|10|56|16:32:13|22|12H|" hex=31 7c 31 30 7c 35 36 7c 31 36 3a 33 32 3a 31 33 7c 32 32 7c 31 32 48 7c
+56.289 W 0x0006 len=24 ascii="1|13|56|16:32:19|22|12H|" hex=31 7c 31 33 7c 35 36 7c 31 36 3a 33 32 3a 31 39 7c 32 32 7c 31 32 48 7c
+61.294 W 0x0006 len=23 ascii="1|7|56|16:32:23|17|12H|" hex=31 7c 37 7c 35 36 7c 31 36 3a 33 32 3a 32 33 7c 31 37 7c 31 32 48 7c
+82.394 W 0x0003 len=0 ascii="" hex=
+82.399 R 0x0303 len=1014 ascii="{.    "SerialNumber": "02C48A044U3670774",.    "Dversion": "5.3.6",.    "error": "0",.    "DeviceType": "D200",.    "HardwareVersion": "SSD210V100".}" hex=7b 0a 20 20 20 20 22 53 65 72 69 61 6c 4e 75 6d 62 65 72 22 3a 20 22 30
+82.399 W 0x000b len=144 ascii="{.    "Align": "bottom",.    "Color": 16777215,.    "FontName": "Source Han Sans SC",.    "ShowTitle": true,.    "Size": 10,.    "Weight": 80.}." hex=7b 0a 20 20 20 20 22 41 6c 69 67 6e 22 3a 20 22 62 6f 74 74 6f 6d 22 2c
+82.399 W 0x0003 len=0 ascii="" hex=
+82.401 W 0x000a len=2 ascii="86" hex=38 36
+82.401 W 0x001a len=1 ascii="0" hex=30
+82.403 R 0x0303 len=1014 ascii="{.    "SerialNumber": "02C48A044U3670774",.    "Dversion": "5.3.6",.    "error": "0",.    "DeviceType": "D200",.    "HardwareVersion": "SSD210V100".}" hex=7b 0a 20 20 20 20 22 53 65 72 69 61 6c 4e 75 6d 62 65 72 22 3a 20 22 30
+82.405 W 0x000a len=2 ascii="86" hex=38 36
+82.405 W 0x001a len=1 ascii="0" hex=30
+82.451 W 0x0001 len=284472 ascii="PK..." hex=50 4b 03 04 14 00 08 00 00 00 17 84 6e 5d 00 00 00 00 00 00 00 00 00 00
+82.523 ZIP saved D:\My Deck App\captures\zip_1_cmd0001.zip bytes=284472/284472
+86.375 W 0x0006 len=24 ascii="1|10|56|16:32:49|21|12H|" hex=31 7c 31 30 7c 35 36 7c 31 36 3a 33 32 3a 34 39 7c 32 31 7c 31 32 48 7c
+86.378 R 0x0303 len=1014 ascii="{.    "SerialNumber": "02C48A044U3670774",.    "Dversion": "5.3.6",.    "error": "0",.    "DeviceType": "D200",.    "HardwareVersion": "SSD210V100".}" hex=7b 0a 20 20 20 20 22 53 65 72 69 61 6c 4e 75 6d 62 65 72 22 3a 20 22 30
+86.379 W 0x000a len=2 ascii="86" hex=38 36
+86.379 W 0x001a len=1 ascii="0" hex=30
+91.397 W 0x0006 len=23 ascii="1|7|56|16:32:53|22|12H|" hex=31 7c 37 7c 35 36 7c 31 36 3a 33 32 3a 35 33 7c 32 32 7c 31 32 48 7c
+96.411 W 0x0006 len=24 ascii="1|25|56|16:32:59|23|12H|" hex=31 7c 32 35 7c 35 36 7c 31 36 3a 33 32 3a 35 39 7c 32 33 7c 31 32 48 7c
+122.395 W 0x0003 len=0 ascii="" hex=
+122.398 W 0x000b len=144 ascii="{.    "Align": "bottom",.    "Color": 16777215,.    "FontName": "Source Han Sans SC",.    "ShowTitle": true,.    "Size": 10,.    "Weight": 80.}." hex=7b 0a 20 20 20 20 22 41 6c 69 67 6e 22 3a 20 22 62 6f 74 74 6f 6d 22 2c
+122.398 W 0x0003 len=0 ascii="" hex=
+122.399 R 0x0303 len=1014 ascii="{.    "SerialNumber": "02C48A044U3670774",.    "Dversion": "5.3.6",.    "error": "0",.    "DeviceType": "D200",.    "HardwareVersion": "SSD210V100".}" hex=7b 0a 20 20 20 20 22 53 65 72 69 61 6c 4e 75 6d 62 65 72 22 3a 20 22 30
+122.401 W 0x000a len=2 ascii="86" hex=38 36
+122.403 R 0x0303 len=1014 ascii="{.    "SerialNumber": "02C48A044U3670774",.    "Dversion": "5.3.6",.    "error": "0",.    "DeviceType": "D200",.    "HardwareVersion": "SSD210V100".}" hex=7b 0a 20 20 20 20 22 53 65 72 69 61 6c 4e 75 6d 62 65 72 22 3a 20 22 30
+122.403 W 0x001a len=1 ascii="0" hex=30
+122.403 W 0x000a len=2 ascii="86" hex=38 36
+122.404 W 0x001a len=1 ascii="0" hex=30
+122.449 W 0x0001 len=284474 ascii="PK..." hex=50 4b 03 04 14 00 08 00 00 00 2d 84 6e 5d 00 00 00 00 00 00 00 00 00 00
+122.521 ZIP saved D:\My Deck App\captures\zip_2_cmd0001.zip bytes=284474/284474
+126.479 W 0x0006 len=23 ascii="1|7|56|16:33:29|24|12H|" hex=31 7c 37 7c 35 36 7c 31 36 3a 33 33 3a 32 39 7c 32 34 7c 31 32 48 7c
+126.481 R 0x0303 len=1014 ascii="{.    "SerialNumber": "02C48A044U3670774",.    "Dversion": "5.3.6",.    "error": "0",.    "DeviceType": "D200",.    "HardwareVersion": "SSD210V100".}" hex=7b 0a 20 20 20 20 22 53 65 72 69 61 6c 4e 75 6d 62 65 72 22 3a 20 22 30
+126.481 W 0x000a len=2 ascii="86" hex=38 36
+126.481 W 0x001a len=1 ascii="0" hex=30
+127.254 W 0x000a len=2 ascii="87" hex=38 37
+127.315 W 0x000a len=2 ascii="86" hex=38 36
+127.482 W 0x000a len=2 ascii="85" hex=38 35
+127.609 W 0x000a len=2 ascii="84" hex=38 34
+127.671 W 0x000a len=2 ascii="83" hex=38 33
+127.713 W 0x000a len=2 ascii="82" hex=38 32
+127.763 W 0x000a len=2 ascii="81" hex=38 31
+127.873 W 0x000a len=2 ascii="80" hex=38 30
+127.934 W 0x000a len=2 ascii="79" hex=37 39
+127.994 W 0x000a len=2 ascii="78" hex=37 38
+128.033 W 0x000a len=2 ascii="77" hex=37 37
+128.070 W 0x000a len=2 ascii="76" hex=37 36
+128.132 W 0x000a len=2 ascii="75" hex=37 35
+128.186 W 0x000a len=2 ascii="74" hex=37 34
+128.220 W 0x000a len=2 ascii="73" hex=37 33
+128.268 W 0x000a len=2 ascii="72" hex=37 32
+128.299 W 0x000a len=2 ascii="71" hex=37 31
+128.333 W 0x000a len=2 ascii="70" hex=37 30
+128.363 W 0x000a len=2 ascii="69" hex=36 39
+128.394 W 0x000a len=2 ascii="68" hex=36 38
+128.440 W 0x000a len=2 ascii="67" hex=36 37
+128.471 W 0x000a len=2 ascii="66" hex=36 36
+128.510 W 0x000a len=2 ascii="65" hex=36 35
+128.538 W 0x000a len=2 ascii="64" hex=36 34
+128.558 W 0x000a len=2 ascii="63" hex=36 33
+128.582 W 0x000a len=2 ascii="62" hex=36 32
+128.616 W 0x000a len=2 ascii="61" hex=36 31
+128.647 W 0x000a len=2 ascii="60" hex=36 30
+128.676 W 0x000a len=2 ascii="59" hex=35 39
+128.709 W 0x000a len=2 ascii="58" hex=35 38
+128.753 W 0x000a len=2 ascii="57" hex=35 37
+128.781 W 0x000a len=2 ascii="56" hex=35 36
+128.813 W 0x000a len=2 ascii="55" hex=35 35
+128.850 W 0x000a len=2 ascii="54" hex=35 34
+128.879 W 0x000a len=2 ascii="53" hex=35 33
+128.905 W 0x000a len=2 ascii="52" hex=35 32
+128.931 W 0x000a len=2 ascii="51" hex=35 31
+128.954 W 0x000a len=2 ascii="50" hex=35 30
+128.985 W 0x000a len=2 ascii="49" hex=34 39
+129.017 W 0x000a len=2 ascii="48" hex=34 38
+129.046 W 0x000a len=2 ascii="47" hex=34 37
+129.073 W 0x000a len=2 ascii="46" hex=34 36
+129.100 W 0x000a len=2 ascii="45" hex=34 35
+129.127 W 0x000a len=2 ascii="44" hex=34 34
+129.162 W 0x000a len=2 ascii="43" hex=34 33
+129.204 W 0x000a len=2 ascii="42" hex=34 32
+129.254 W 0x000a len=2 ascii="41" hex=34 31
+129.293 W 0x000a len=2 ascii="40" hex=34 30
+129.346 W 0x000a len=2 ascii="39" hex=33 39
+129.396 W 0x000a len=2 ascii="38" hex=33 38
+129.430 W 0x000a len=2 ascii="37" hex=33 37
+129.481 W 0x000a len=2 ascii="36" hex=33 36
+129.546 W 0x000a len=2 ascii="35" hex=33 35
+129.583 W 0x000a len=2 ascii="34" hex=33 34
+129.608 W 0x000a len=2 ascii="33" hex=33 33
+129.630 W 0x000a len=2 ascii="32" hex=33 32
+129.650 W 0x000a len=2 ascii="31" hex=33 31
+129.667 W 0x000a len=2 ascii="30" hex=33 30
+129.688 W 0x000a len=2 ascii="29" hex=32 39
+129.710 W 0x000a len=2 ascii="28" hex=32 38
+129.733 W 0x000a len=2 ascii="27" hex=32 37
+129.759 W 0x000a len=2 ascii="26" hex=32 36
+129.779 W 0x000a len=2 ascii="25" hex=32 35
+129.803 W 0x000a len=2 ascii="24" hex=32 34
+129.818 W 0x000a len=2 ascii="23" hex=32 33
+129.831 W 0x000a len=2 ascii="22" hex=32 32
+129.840 W 0x000a len=2 ascii="21" hex=32 31
+129.851 W 0x000a len=2 ascii="20" hex=32 30
+129.863 W 0x000a len=2 ascii="19" hex=31 39
+129.883 W 0x000a len=2 ascii="18" hex=31 38
+129.919 W 0x000a len=2 ascii="17" hex=31 37
+129.946 W 0x000a len=2 ascii="16" hex=31 36
+129.972 W 0x000a len=2 ascii="15" hex=31 35
+130.000 W 0x000a len=2 ascii="14" hex=31 34
+130.021 W 0x000a len=2 ascii="13" hex=31 33
+130.037 W 0x000a len=2 ascii="12" hex=31 32
+130.053 W 0x000a len=2 ascii="11" hex=31 31
+130.066 W 0x000a len=2 ascii="10" hex=31 30
+130.079 W 0x000a len=1 ascii="9" hex=39
+130.090 W 0x000a len=1 ascii="8" hex=38
+130.104 W 0x000a len=1 ascii="7" hex=37
+130.118 W 0x000a len=1 ascii="6" hex=36
+130.130 W 0x000a len=1 ascii="5" hex=35
+130.144 W 0x000a len=1 ascii="4" hex=34
+130.169 W 0x000a len=1 ascii="3" hex=33
+130.187 W 0x000a len=1 ascii="2" hex=32
+130.202 W 0x000a len=1 ascii="1" hex=31
+130.214 W 0x000a len=1 ascii="0" hex=30
+131.481 W 0x0006 len=24 ascii="1|10|56|16:33:33|20|12H|" hex=31 7c 31 30 7c 35 36 7c 31 36 3a 33 33 3a 33 33 7c 32 30 7c 31 32 48 7c
+132.179 W 0x000a len=1 ascii="1" hex=31
+132.193 W 0x000a len=1 ascii="2" hex=32
+132.209 W 0x000a len=1 ascii="3" hex=33
+132.225 W 0x000a len=1 ascii="4" hex=34
+132.239 W 0x000a len=1 ascii="5" hex=35
+132.253 W 0x000a len=1 ascii="6" hex=36
+132.265 W 0x000a len=1 ascii="7" hex=37
+132.278 W 0x000a len=1 ascii="8" hex=38
+132.639 W 0x000a len=1 ascii="9" hex=39
+132.641 W 0x000a len=2 ascii="10" hex=31 30
+132.644 W 0x000a len=2 ascii="11" hex=31 31
+132.647 W 0x000a len=2 ascii="12" hex=31 32
+132.652 W 0x000a len=2 ascii="13" hex=31 33
+132.654 W 0x000a len=2 ascii="14" hex=31 34
+132.657 W 0x000a len=2 ascii="15" hex=31 35
+132.661 W 0x000a len=2 ascii="16" hex=31 36
+132.664 W 0x000a len=2 ascii="17" hex=31 37
+132.667 W 0x000a len=2 ascii="18" hex=31 38
+132.671 W 0x000a len=2 ascii="19" hex=31 39
+132.673 W 0x000a len=2 ascii="20" hex=32 30
+132.676 W 0x000a len=2 ascii="21" hex=32 31
+132.680 W 0x000a len=2 ascii="22" hex=32 32
+132.683 W 0x000a len=2 ascii="23" hex=32 33
+132.687 W 0x000a len=2 ascii="24" hex=32 34
+132.690 W 0x000a len=2 ascii="25" hex=32 35
+132.713 W 0x000a len=2 ascii="26" hex=32 36
+132.739 W 0x000a len=2 ascii="27" hex=32 37
+132.763 W 0x000a len=2 ascii="28" hex=32 38
+132.784 W 0x000a len=2 ascii="29" hex=32 39
+132.811 W 0x000a len=2 ascii="30" hex=33 30
+132.835 W 0x000a len=2 ascii="31" hex=33 31
+132.856 W 0x000a len=2 ascii="32" hex=33 32
+132.883 W 0x000a len=2 ascii="33" hex=33 33
+132.913 W 0x000a len=2 ascii="34" hex=33 34
+132.963 W 0x000a len=2 ascii="35" hex=33 35
+133.004 W 0x000a len=2 ascii="36" hex=33 36
+133.055 W 0x000a len=2 ascii="37" hex=33 37
+133.102 W 0x000a len=2 ascii="38" hex=33 38
+133.150 W 0x000a len=2 ascii="39" hex=33 39
+133.188 W 0x000a len=2 ascii="40" hex=34 30
+133.228 W 0x000a len=2 ascii="41" hex=34 31
+133.260 W 0x000a len=2 ascii="42" hex=34 32
+133.297 W 0x000a len=2 ascii="43" hex=34 33
+133.336 W 0x000a len=2 ascii="44" hex=34 34
+133.371 W 0x000a len=2 ascii="45" hex=34 35
+133.438 W 0x000a len=2 ascii="46" hex=34 36
+133.503 W 0x000a len=2 ascii="47" hex=34 37
+133.557 W 0x000a len=2 ascii="48" hex=34 38
+133.609 W 0x000a len=2 ascii="49" hex=34 39
+133.658 W 0x000a len=2 ascii="50" hex=35 30
+133.731 W 0x000a len=2 ascii="51" hex=35 31
+133.758 W 0x000a len=2 ascii="52" hex=35 32
+133.794 W 0x000a len=2 ascii="53" hex=35 33
+133.840 W 0x000a len=2 ascii="54" hex=35 34
+133.888 W 0x000a len=2 ascii="55" hex=35 35
+133.916 W 0x000a len=2 ascii="56" hex=35 36
+133.966 W 0x000a len=2 ascii="57" hex=35 37
+134.018 W 0x000a len=2 ascii="58" hex=35 38
+134.056 W 0x000a len=2 ascii="59" hex=35 39
+134.111 W 0x000a len=2 ascii="60" hex=36 30
+134.157 W 0x000a len=2 ascii="61" hex=36 31
+134.194 W 0x000a len=2 ascii="62" hex=36 32
+134.257 W 0x000a len=2 ascii="63" hex=36 33
+134.300 W 0x000a len=2 ascii="64" hex=36 34
+134.335 W 0x000a len=2 ascii="65" hex=36 35
+134.388 W 0x000a len=2 ascii="66" hex=36 36
+134.419 W 0x000a len=2 ascii="67" hex=36 37
+134.439 W 0x000a len=2 ascii="68" hex=36 38
+134.478 W 0x000a len=2 ascii="69" hex=36 39
+134.559 W 0x000a len=2 ascii="70" hex=37 30
+134.610 W 0x000a len=2 ascii="71" hex=37 31
+134.650 W 0x000a len=2 ascii="72" hex=37 32
+134.700 W 0x000a len=2 ascii="73" hex=37 33
+134.726 W 0x000a len=2 ascii="74" hex=37 34
+134.745 W 0x000a len=2 ascii="75" hex=37 35
+134.765 W 0x000a len=2 ascii="76" hex=37 36
+134.784 W 0x000a len=2 ascii="77" hex=37 37
+134.803 W 0x000a len=2 ascii="78" hex=37 38
+134.828 W 0x000a len=2 ascii="79" hex=37 39
+134.870 W 0x000a len=2 ascii="80" hex=38 30
+134.941 W 0x000a len=2 ascii="81" hex=38 31
+134.989 W 0x000a len=2 ascii="82" hex=38 32
+135.043 W 0x000a len=2 ascii="83" hex=38 33
+135.083 W 0x000a len=2 ascii="84" hex=38 34
+135.123 W 0x000a len=2 ascii="85" hex=38 35
+135.183 W 0x000a len=2 ascii="86" hex=38 36
+135.340 W 0x000a len=2 ascii="87" hex=38 37
+136.482 W 0x0006 len=24 ascii="1|17|56|16:33:39|10|12H|" hex=31 7c 31 37 7c 35 36 7c 31 36 3a 33 33 3a 33 39 7c 31 30 7c 31 32 48 7c
+140.405 W 0x000d len=35930 ascii="PK..." hex=50 4b 03 04 14 00 08 00 00 00 35 84 6e 5d 00 00 00 00 00 00 00 00 00 00
+140.416 ZIP saved D:\My Deck App\captures\zip_3_cmd000d.zip bytes=35930/35930
+140.419 W 0x000d len=35296 ascii="PK..." hex=50 4b 03 04 14 00 08 00 00 00 36 84 6e 5d 00 00 00 00 00 00 00 00 00 00
+140.465 ZIP saved D:\My Deck App\captures\zip_4_cmd000d.zip bytes=35296/35296
+141.484 W 0x0006 len=24 ascii="1|12|56|16:33:43|10|12H|" hex=31 7c 31 32 7c 35 36 7c 31 36 3a 33 33 3a 34 33 7c 31 30 7c 31 32 48 7c
+141.645 W 0x000d len=35461 ascii="PK..." hex=50 4b 03 04 14 00 08 00 00 00 36 84 6e 5d 00 00 00 00 00 00 00 00 00 00
+141.654 ZIP saved D:\My Deck App\captures\zip_5_cmd000d.zip bytes=35461/35461
+141.658 W 0x000d len=35904 ascii="PK..." hex=50 4b 03 04 14 00 08 00 00 00 36 84 6e 5d 00 00 00 00 00 00 00 00 00 00
+141.690 ZIP saved D:\My Deck App\captures\zip_6_cmd000d.zip bytes=35904/35904
+142.574 W 0x000d len=36012 ascii="PK..." hex=50 4b 03 04 14 00 08 00 00 00 37 84 6e 5d 00 00 00 00 00 00 00 00 00 00
+142.583 ZIP saved D:\My Deck App\captures\zip_7_cmd000d.zip bytes=36012/36012
+142.586 W 0x000d len=35938 ascii="PK..." hex=50 4b 03 04 14 00 08 00 00 00 37 84 6e 5d 00 00 00 00 00 00 00 00 00 00
+142.634 ZIP saved D:\My Deck App\captures\zip_8_cmd000d.zip bytes=35938/35938
+146.485 W 0x0006 len=22 ascii="1|9|56|16:33:49|9|12H|" hex=31 7c 39 7c 35 36 7c 31 36 3a 33 33 3a 34 39 7c 39 7c 31 32 48 7c
+151.486 W 0x0006 len=23 ascii="1|10|56|16:33:53|8|12H|" hex=31 7c 31 30 7c 35 36 7c 31 36 3a 33 33 3a 35 33 7c 38 7c 31 32 48 7c
+156.488 W 0x0006 len=24 ascii="1|12|56|16:33:59|10|12H|" hex=31 7c 31 32 7c 35 36 7c 31 36 3a 33 33 3a 35 39 7c 31 30 7c 31 32 48 7c
+161.489 W 0x0006 len=23 ascii="1|10|56|16:34:03|9|12H|" hex=31 7c 31 30 7c 35 36 7c 31 36 3a 33 34 3a 30 33 7c 39 7c 31 32 48 7c
+161.946 W 0x000d len=63240 ascii="PK..." hex=50 4b 03 04 14 00 08 00 00 00 42 84 6e 5d 00 00 00 00 00 00 00 00 00 00
+161.963 ZIP saved D:\My Deck App\captures\zip_9_cmd000d.zip bytes=63240/63240
+166.491 W 0x0006 len=22 ascii="1|7|56|16:34:09|8|12H|" hex=31 7c 37 7c 35 36 7c 31 36 3a 33 34 3a 30 39 7c 38 7c 31 32 48 7c
+170.745 R 0x0101 button 01 08 01 01
+170.912 R 0x0101 button 01 08 01 00
+171.199 R 0x0101 button 01 07 01 01
+171.379 R 0x0101 button 01 07 01 00
+171.491 W 0x0006 len=22 ascii="1|5|56|16:34:13|8|12H|" hex=31 7c 35 7c 35 36 7c 31 36 3a 33 34 3a 31 33 7c 38 7c 31 32 48 7c
+171.562 R 0x0101 button 01 08 01 01
+171.698 R 0x0101 button 01 08 01 00
+171.954 R 0x0101 button 01 08 01 01
+172.061 R 0x0101 button 01 08 01 00
+172.138 R 0x0101 button 01 08 01 01
+172.245 R 0x0101 button 01 08 01 00
+172.425 R 0x0101 button 01 07 01 01
+172.518 R 0x0101 button 01 07 01 00
+172.594 R 0x0101 button 01 07 01 01
+172.669 R 0x0101 button 01 07 01 00
+172.746 R 0x0101 button 01 07 01 01
+172.823 R 0x0101 button 01 07 01 00
+173.019 R 0x0101 button 01 08 01 01
+173.095 R 0x0101 button 01 08 01 00
+173.172 R 0x0101 button 01 08 01 01
+173.218 R 0x0101 button 01 08 01 00
+173.309 R 0x0101 button 01 08 01 01
+173.371 R 0x0101 button 01 08 01 00
+173.568 R 0x0101 button 01 07 01 01
+173.643 R 0x0101 button 01 07 01 00
+173.735 R 0x0101 button 01 07 01 01
+173.796 R 0x0101 button 01 07 01 00
+173.857 R 0x0101 button 01 07 01 01
+173.934 R 0x0101 button 01 07 01 00
+176.493 W 0x0006 len=23 ascii="1|14|56|16:34:19|9|12H|" hex=31 7c 31 34 7c 35 36 7c 31 36 3a 33 34 3a 31 39 7c 39 7c 31 32 48 7c
+181.506 W 0x0006 len=24 ascii="1|16|56|16:34:23|19|12H|" hex=31 7c 31 36 7c 35 36 7c 31 36 3a 33 34 3a 32 33 7c 31 39 7c 31 32 48 7c
+186.524 W 0x0006 len=23 ascii="1|18|54|16:34:29|9|12H|" hex=31 7c 31 38 7c 35 34 7c 31 36 3a 33 34 3a 32 39 7c 39 7c 31 32 48 7c
+191.535 W 0x0006 len=23 ascii="1|11|55|16:34:33|8|12H|" hex=31 7c 31 31 7c 35 35 7c 31 36 3a 33 34 3a 33 33 7c 38 7c 31 32 48 7c
+196.565 W 0x0006 len=23 ascii="1|15|55|16:34:39|9|12H|" hex=31 7c 31 35 7c 35 35 7c 31 36 3a 33 34 3a 33 39 7c 39 7c 31 32 48 7c
+201.578 W 0x0006 len=23 ascii="1|17|55|16:34:43|9|12H|" hex=31 7c 31 37 7c 35 35 7c 31 36 3a 33 34 3a 34 33 7c 39 7c 31 32 48 7c
+206.588 W 0x0006 len=23 ascii="1|13|55|16:34:49|9|12H|" hex=31 7c 31 33 7c 35 35 7c 31 36 3a 33 34 3a 34 39 7c 39 7c 31 32 48 7c
+211.604 W 0x0006 len=24 ascii="1|16|55|16:34:53|10|12H|" hex=31 7c 31 36 7c 35 35 7c 31 36 3a 33 34 3a 35 33 7c 31 30 7c 31 32 48 7c
+216.625 W 0x0006 len=24 ascii="1|41|59|16:34:59|24|12H|" hex=31 7c 34 31 7c 35 39 7c 31 36 3a 33 34 3a 35 39 7c 32 34 7c 31 32 48 7c

@@ -1,0 +1,57 @@
+# deckd config. Edit and save: `deckd serve` reloads it automatically.
+brightness = 86
+# glyph_font = "C:\\Windows\\Fonts\\seguisym.ttf"   # font used for `glyph`
+
+# pos = "col,row": columns 0-4 left to right, rows 0-2 top to bottom.
+# Row 2 has only 3 buttons (cols 0-2); the rest of that row is the clock.
+# Each button can have: label, color, glyph (big symbol), icon (image file), action.
+# Actions: run, open, hotkey, media. A button with no action just shows its label.
+
+[[button]]
+pos = "0,0"
+label = "Notepad"
+color = "#1f6feb"
+glyph = "✎"
+action = { type = "run", command = "notepad.exe" }
+
+[[button]]
+pos = "1,0"
+label = "Calc"
+color = "#2ea043"
+glyph = "∑"
+action = { type = "run", command = "calc.exe" }
+
+[[button]]
+pos = "2,0"
+label = "Snip"
+color = "#a371f7"
+glyph = "✂"
+action = { type = "hotkey", keys = "win+shift+s" }
+
+[[button]]
+pos = "0,1"
+label = "Vol -"
+color = "#d29922"
+glyph = "🔉"
+action = { type = "media", key = "vol_down" }
+
+[[button]]
+pos = "1,1"
+label = "Mute"
+color = "#db6d28"
+glyph = "🔇"
+action = { type = "media", key = "mute" }
+
+[[button]]
+pos = "2,1"
+label = "Vol +"
+color = "#d29922"
+glyph = "🔊"
+action = { type = "media", key = "vol_up" }
+
+[[button]]
+pos = "3,1"
+label = "Play"
+color = "#1f6feb"
+glyph = "▶"
+action = { type = "media", key = "play_pause" }

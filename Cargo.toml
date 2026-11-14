@@ -1,0 +1,20 @@
+[package]
+name = "deckd"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ab_glyph = "0.2.32"
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+eframe = { version = "0.37.0", default-features = false, features = ["glow", "default_fonts"] }
+hidapi = { version = "2.6.7", default-features = false }
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+rfd = "0.18.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+toml = "1.2.1"
+windows-sys = { version = "0.61.2", features = ["Win32_UI_Input_KeyboardAndMouse"] }
+zip = { version = "9.5.1", default-features = false, features = ["deflate"] }
+
+[features]
+windowed = []
