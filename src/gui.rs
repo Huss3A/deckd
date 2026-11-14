@@ -429,6 +429,15 @@ impl App {
         let snapshot = |b: &Button| serde_json::to_string(b).unwrap_or_default();
         let before = snapshot(&b);
 
+        // the wide slot can keep the firmware clock and only add actions under it
+        if (col, row) == (3, 2) {
+            ui.checkbox(&mut b.keep_clock, "Keep the firmware clock (use the slot for actions only)");
+            if b.keep_clock {
+                ui.weak("The look settings below are ignored while the clock is kept.");
+            }
+            ui.add_space(4.0);
+        }
+
         // ---- look ----
         ui.label(egui::RichText::new("LOOK").small().weak());
         egui::Frame::group(ui.style()).show(ui, |ui| {

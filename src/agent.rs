@@ -177,6 +177,13 @@ pub fn run(cmd: &str, raw: &[String]) -> Result<(), CliError> {
             if let Some(v) = a.get("glyph") { b.glyph = opt(v); }
             if let Some(v) = a.get("glyph-color") { b.glyph_color = opt(v); }
             // per-button rim colors for tap / double tap ("" resets to the global [feedback] color)
+            if let Some(v) = a.get("keep-clock") {
+                b.keep_clock = match v {
+                    "true" => true,
+                    "false" => false,
+                    _ => return Err(usage("--keep-clock must be true or false")),
+                };
+            }
             if let Some(v) = a.get("rim-tap") { b.rim_tap = opt(v); }
             if let Some(v) = a.get("rim-double") { b.rim_double = opt(v); }
             if let Some(ms) = a.get("repeat-ms") {
@@ -395,6 +402,7 @@ fn schema() -> Value {
                     "icon": {"type": "string", "description": "image path, scaled to 196x196"},
                     "glyph": {"type": "string", "description": "symbol drawn large in the middle"},
                     "glyph_color": color,
+                    "keep_clock": {"type": "boolean", "description": "wide slot 3,2 only: keep the firmware clock, actions only"},
                     "rim_tap": color,
                     "rim_double": color,
                     "page": {"type": "integer", "minimum": 1, "maximum": 9, "default": 1},

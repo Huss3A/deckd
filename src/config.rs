@@ -211,6 +211,9 @@ pub struct Button {
     pub glyph_color: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action: Option<Action>,
+    /// Wide slot (3,2) only: keep the firmware clock on screen and use the slot just for actions (no picture, no rim).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub keep_clock: bool,
     /// Rim color for this button's tap (overrides `[feedback] tap`), "#rrggbb".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rim_tap: Option<String>,
@@ -344,7 +347,7 @@ impl Default for Config {
 
 impl Default for Button {
     fn default() -> Self {
-        Button { page: 1, pos: String::new(), double: None, holds: Vec::new(), hold: None, hold_ms: DEFAULT_HOLD_MS, hold_long: None, hold_long_ms: DEFAULT_LONG_MS, repeat: None, repeat_ms: DEFAULT_REPEAT_MS, label: None, color: None, icon: None, glyph: None, glyph_color: None, action: None, rim_tap: None, rim_double: None }
+        Button { page: 1, pos: String::new(), double: None, holds: Vec::new(), hold: None, hold_ms: DEFAULT_HOLD_MS, hold_long: None, hold_long_ms: DEFAULT_LONG_MS, repeat: None, repeat_ms: DEFAULT_REPEAT_MS, label: None, color: None, icon: None, glyph: None, glyph_color: None, action: None, keep_clock: false, rim_tap: None, rim_double: None }
     }
 }
 

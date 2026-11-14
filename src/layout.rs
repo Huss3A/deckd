@@ -204,8 +204,8 @@ pub fn build_zip(cfg: &Config, page: u8) -> Result<Vec<u8>, String> {
             }
             let key = format!("{col}_{row}");
             let b = cfg.button_at(page, col, row);
-            if row == 2 && col == 3 && b.is_none() {
-                // no button on the wide slot: keep the firmware clock
+            if row == 2 && col == 3 && b.is_none_or(|b| b.keep_clock) {
+                // no button on the wide slot, or one that keeps the clock: the firmware clock stays on screen
                 manifest.insert(key, json!({"SmallViewMode":1,"State":0,"ViewParam":[{"Font":font(),"Text":""}]}));
                 continue;
             }

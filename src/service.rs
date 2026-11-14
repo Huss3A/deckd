@@ -97,6 +97,10 @@ enum Glow {
 type GlowQueue = Vec<(u8, Glow)>;
 
 fn send_cell(dev: &HidDevice, cfg: &Config, page: u8, idx: usize, rim: Option<([u8; 3], u32, u32)>) -> Result<(), String> {
+    // a wide slot that keeps the firmware clock has no picture to draw a rim on
+    if idx == 13 && cfg.button_at(page, 3, 2).is_some_and(|b| b.keep_clock) {
+        return Ok(());
+    }
     let zip = layout::cell_zip(cfg, page, (idx % 5) as u8, (idx / 5) as u8, rim)?;
     protocol::upload_zip(dev, cmd::PARTIAL_LAYOUT, &zip, false)
 }
@@ -128,25 +132,30 @@ const WIDE_GAP: Duration = Duration::from_millis(700);
 
 impl WideFilter {
     /// Normal buttons: only state 01 counts. Index 13: collapse bursts. Returns whether the event should be handled.
-    fn accept(&mut self, index: u8, state: u8, pressed: bool) -> bool {
+    fn accept(&mut self, ctx: &Ctx, index: u8, state: u8, pressed: bool) -> bool {
         if index != 13 {
             return state == 0x01;
         }
         let gap_ok = self.last.is_none_or(|t| t.elapsed() >= WIDE_GAP);
         self.last = Some(Instant::now());
-        if pressed {
-            if gap_ok {
+        // A new touch always starts with state c8 (the burst then steps c9, ca, ...), so c8 starts a press even inside the
+        // previous burst; that is what lets a quick second tap through. Other states only start one after a quiet gap.
+        let ok = if pressed {
+            if state == 0xc8 || gap_ok {
                 self.in_press = true;
-                return true; // start of a new press
+                true
+            } else {
+                false // later pair of the same burst
             }
-            false // later pair of the same burst
         } else if self.in_press {
             // the first "up" ends the press: a short tap ends here; a long press ends with state 01 after its real duration
             self.in_press = false;
             true
         } else {
             false
-        }
+        };
+        ctx.log(format!("wide slot: state {state:#04x} {} -> {}", if pressed { "down" } else { "up" }, if ok { "used" } else { "ignored (part of a burst)" }));
+        ok
     }
 }
 
@@ -279,7 +288,7 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                 }
             }
             if last_beat.elapsed() >= HEARTBEAT_EVERY {
-                protocol::heartbeat_mode(&dev, if cfg.button_at(page, 3, 2).is_some() { 2 } else { 1 })?;
+                protocol::heartbeat_mode(&dev, if cfg.button_at(page, 3, 2).is_some_and(|b| !b.keep_clock) { 2 } else { 1 })?;
                 last_beat = Instant::now();
             }
             if last_check.elapsed() >= Duration::from_secs(1) {
@@ -401,7 +410,7 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
             match dev.read(&mut buf).map_err(|e| format!("read error: {e}"))? {
                 0 => std::thread::sleep(Duration::from_millis(10)),
                 n => match protocol::parse(&buf[..n]) {
-                    Some(Event::Button { index, state, pressed }) if (index as usize) < 14 && wide.accept(index, state, pressed) => {
+                    Some(Event::Button { index, state, pressed }) if (index as usize) < 14 && wide.accept(ctx, index, state, pressed) => {
                         let i = index as usize;
                         let b = cfg.button_for_index(page, index);
                         let (has_double, has_hold) = (b.is_some_and(|b| b.double.is_some()), b.is_some_and(|b| !b.holds.is_empty()));
