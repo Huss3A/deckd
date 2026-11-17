@@ -14,13 +14,12 @@ Protocol knowledge lives in [NOTES.md](NOTES.md).
 1. **Replace Ulanzi Studio** with more granular control and a lighter footprint. *(core done, see Status)*
 2. **A GUI** to design the deck: click a button, set label / color / symbol / image / action. *(done, needs refinement)*
 3. **A scriptable CLI.** Inspect and change the deck, simulate presses and preview layouts without the GUI, with JSON output and
-   safe defaults. *(offline commands built: status, list, get, set, clear, set-brightness, validate, preview, press, schema;
-   live `events` / connection status are not built yet)*
+   safe defaults. *(built: status, events, list, get, set, clear, set-brightness, validate, preview, press, schema)*
 4. Run at login, hidden, no console window. *(built: Settings > Launch on Startup, tray icon, close hides to the tray)*
 5. Wide slot control: clock / date / weather / system stats / image or GIF. *(built)*
 6. Multi-page layouts, double-tap and hold actions, macros, pinned keys, real program icons for `run` buttons. *(built)*
 
-## Status (2026-11-14)
+## Status
 
 Working and verified on the real deck:
 - Full connect handshake and 5 s heartbeat (needed for the deck to report presses), brightness.
@@ -52,7 +51,11 @@ compete for it: run only one at a time.
 | `deckd listen\|run [secs]` | Print button events (`run` also sends the heartbeat) |
 | `deckd brightness <0-100>` | Set brightness |
 | `deckd upload\|patch <zip> [secs]` | Send a raw layout ZIP (debugging) |
-| `deckd status\|list\|get\|set\|clear\|set-brightness\|validate\|preview\|press\|schema` | Scriptable CLI: JSON output, file based (`deckd schema` prints the config schema) |
+| `deckd status\|list\|get\|set\|clear\|set-brightness\|validate\|preview\|press\|schema` | Scriptable CLI: JSON output (`deckd schema` prints the config schema) |
+| `deckd events [--secs N] [--count N] [--history]` | Streams deck events (connect, press, release, gestures, page changes) as NDJSON from the running service; exit 3 if none is running |
+
+`deckd status` also reports `service_running`, `deck_connected`, `page` and the deck info. The running service writes `status.json`
+and `events.ndjson` beside the config for this.
 
 ## Config (`deck.toml`)
 
@@ -94,7 +97,6 @@ frame timing, min 100 ms), `"live_clock"` (time drawn by deckd, `clock_format` s
 both redrawn every `refresh_ms` (200-60000, default 1000). Any button can use these. On the wide slot `"3,2"` only: `"clock"` keeps the
 firmware clock and `"stats"` hands the slot to the firmware's CPU/RAM readout (heartbeat then carries the numbers every second); neither
 draws a picture or a rim, so the button's actions still work under them. CLI: `deckd set 3,2 --face live_clock --clock-format %H:%M`.
-(Live faces and GIFs are built but not yet tried on the deck; the firmware stats mode comes from community docs only.)
 
 **State-aware buttons (icon flips, e.g. mute):** give a button an `[button.alt]` look (`label`, `color`, `glyph`, `glyph_color`, `icon`; whatever
 is set replaces the normal look while the state is "on") and a `state`: `toggle` (default; flips on every tap of the normal action, kept
@@ -102,8 +104,7 @@ in memory only), `output_muted` (the default speaker is muted: follows the `mute
 `mic_muted` (the default microphone is muted). The media key `mic_mute` flips the microphone mute directly, in every app, so a mic
 button is `action = media mic_mute` + `state = "mic_muted"`. Window: "Alternate look" with one-click Mic mute / Speaker mute presets.
 CLI: `deckd set 0,0 --action-type media --key mic_mute --state mic_muted --alt-label "Mic MUTED" --alt-color "#b62324"`,
-`deckd preview --alt` renders the alternate looks, `deckd audio` prints the current mute states (read-only). Not tried on the deck yet.
-
+`deckd preview --alt` renders the alternate looks, `deckd audio` prints the current mute states (read-only).
 **Pages:** top-level `pages = N` (1-9) and `page = 2` on a button (omitted = page 1). A `page` action on a button switches
 the deck to another page (the service re-uploads that page's layout, ~1 s). Put a "back" button on each later page yourself.
 

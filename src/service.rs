@@ -94,14 +94,74 @@ impl Ctx {
 
 /// `deckd.log` next to the config: every log line is also appended here (so it can be read or copied after the fact).
 static LOG_FILE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+/// `events.ndjson` next to the config: one JSON object per deck event, read by `deckd events`.
+static EVENTS_FILE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// File names the service writes beside the config; `deckd status` and `deckd events` read them.
+pub const STATUS_FILE: &str = "status.json";
+pub const EVENTS_NAME: &str = "events.ndjson";
+
+pub fn sibling(config: &Path, name: &str) -> PathBuf {
+    config.parent().filter(|d| !d.as_os_str().is_empty()).map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(".")).join(name)
+}
 
 fn init_log_file(config: &Path) {
-    let p = config.parent().filter(|d| !d.as_os_str().is_empty()).map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(".")).join("deckd.log");
+    let p = sibling(config, "deckd.log");
     // start a fresh file when the old one has grown large
     if std::fs::metadata(&p).is_ok_and(|m| m.len() > 512 * 1024) {
         let _ = std::fs::remove_file(&p);
     }
     let _ = LOG_FILE.set(p);
+    let e = sibling(config, EVENTS_NAME);
+    if std::fs::metadata(&e).is_ok_and(|m| m.len() > 512 * 1024) {
+        let _ = std::fs::remove_file(&e);
+    }
+    let _ = EVENTS_FILE.set(e);
+}
+
+/// Appends one event line (`event` plus any extra fields) to the events file.
+fn emit(event: &str, extra: serde_json::Value) {
+    let Some(p) = EVENTS_FILE.get() else { return };
+    let now = chrono::Local::now();
+    let mut o = serde_json::json!({ "ts_ms": now.timestamp_millis(), "time": now.format("%H:%M:%S%.3f").to_string(), "event": event });
+    if let (Some(m), Some(x)) = (o.as_object_mut(), extra.as_object()) {
+        m.extend(x.clone());
+    }
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) {
+        let _ = writeln!(f, "{o}");
+    }
+}
+
+fn pos_of(index: u8) -> String {
+    format!("{},{}", index % 5, index / 5)
+}
+
+/// Keeps `status.json` current (every 2 s, and right away on a change) so `deckd status` can tell whether a service is running.
+fn status_writer(config: PathBuf, ctx: Ctx) {
+    let path = sibling(&config, STATUS_FILE);
+    let mut last = String::new();
+    let mut written = Instant::now() - Duration::from_secs(10);
+    while !ctx.stopping() {
+        let (connected, info, page, err) = {
+            let s = ctx.status.lock().unwrap_or_else(|e| e.into_inner());
+            (s.connected, s.info.clone(), s.page, s.config_error.clone())
+        };
+        let body = serde_json::json!({ "pid": std::process::id(), "connected": connected, "info": info, "page": page, "config_error": err, "config": config.display().to_string() }).to_string();
+        if body != last || written.elapsed() >= Duration::from_secs(2) {
+            let doc = serde_json::json!({ "updated_ms": chrono::Local::now().timestamp_millis(), "state": serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default() });
+            let tmp = path.with_extension("tmp");
+            if std::fs::write(&tmp, doc.to_string()).is_ok() {
+                let _ = std::fs::rename(&tmp, &path);
+            }
+            last = body;
+            written = Instant::now();
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    // clean shutdown: say so instead of leaving a stale "connected"
+    let doc = serde_json::json!({ "updated_ms": chrono::Local::now().timestamp_millis(), "state": { "pid": std::process::id(), "connected": false, "stopped": true } });
+    let _ = std::fs::write(&path, doc.to_string());
 }
 
 fn modified(path: &Path) -> Option<SystemTime> {
@@ -294,6 +354,7 @@ fn run_action(action: &Action, page: u8, cfg: &Config, ctx: &Ctx) -> Option<u8> 
 /// on its own thread; a step marked `split` starts a separate macro that runs in parallel. Returns a page switch, if any.
 fn run_hold_group(steps: Vec<crate::config::HoldStep>, index: u8, held_ms: u128, page: u8, cfg: &Config, ctx: &Ctx, glow: &mut GlowQueue) -> Option<u8> {
     glow.push((index, Glow::Hold));
+    emit("gesture", serde_json::json!({ "button": index, "pos": pos_of(index), "page": page, "gesture": "hold", "held_ms": held_ms as u64, "assigned": true }));
     let mut jobs: Vec<Vec<Action>> = vec![Vec::new()];
     let mut switch = None;
     for s in steps.iter() {
@@ -348,6 +409,7 @@ fn fire(which: Fire, index: u8, page: u8, cfg: &Config, ctx: &Ctx, glow: &mut Gl
         Fire::Repeat => "repeat",
         Fire::TapHold => "tap-hold repeat",
     };
+    emit("gesture", serde_json::json!({ "button": index, "pos": pos_of(index), "page": page, "gesture": gesture, "assigned": action.is_some() }));
     match action {
         Some(a) => {
             ctx.log(format!("button {index} {gesture} detected -> {a:?}"));
@@ -374,6 +436,7 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
     let dev = protocol::open(&api)?;
     let info = protocol::handshake(&dev, cfg.brightness)?;
     ctx.log("deck connected");
+    emit("connected", serde_json::json!({ "info": info }));
     ctx.with(|s| {
         s.connected = true;
         s.info = info;
@@ -423,6 +486,7 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                     keys = [Key::default(); 14];
                     glow_until = [None; 14]; // the full upload below redraws every tile
                     glow_q.clear();
+                    emit("page", serde_json::json!({ "page": page }));
                     ctx.with(|s| s.page = page);
                     sys.polled = Instant::now() - Duration::from_secs(5); // the new page may follow other devices: poll now
                     sys.poll(cfg, page);
@@ -639,6 +703,7 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                             }
                             last_press[i] = Instant::now();
                             ctx.with(|s| s.pressed = Some((index, Instant::now())));
+                            emit("press", serde_json::json!({ "button": index, "pos": pos_of(index), "page": page }));
                             keys[i].down = Some(Instant::now());
                             keys[i].armed = keys[i].tap_at.take().is_some();
                             if !defers {
@@ -646,6 +711,9 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
                             }
                         } else {
                             let held = keys[i].down.take().map(|d| d.elapsed());
+                            if let Some(h) = held {
+                                emit("release", serde_json::json!({ "button": index, "pos": pos_of(index), "page": page, "held_ms": h.as_millis() as u64 }));
+                            }
                             let was_armed = std::mem::take(&mut keys[i].armed);
                             if keys[i].repeating {
                                 // released after a repeat: that was a hold, not a tap
@@ -702,6 +770,7 @@ fn session(cfg: &mut Config, path: &Path, seen: &mut Option<SystemTime>, ctx: &C
         }
     })();
     ctx.with(|s| s.connected = false);
+    emit("disconnected", serde_json::json!({ "reason": result.as_ref().err() }));
     result
 }
 
@@ -718,6 +787,10 @@ pub fn run(path: PathBuf, ctx: Ctx) {
         }
     };
     ctx.log(format!("service started ({})", path.display()));
+    {
+        let (p, c) = (path.clone(), ctx.clone());
+        std::thread::spawn(move || status_writer(p, c));
+    }
     while !ctx.stopping() {
         if let Err(e) = session(&mut cfg, &path, &mut seen, &ctx) {
             ctx.log(e);

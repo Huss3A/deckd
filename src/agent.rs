@@ -10,7 +10,7 @@ use std::io::Read;
 use std::path::PathBuf;
 
 pub const COMMANDS: &[&str] =
-    &["status", "list", "get", "set", "clear", "set-brightness", "feedback", "validate", "preview", "press", "schema"];
+    &["status", "events", "list", "get", "set", "clear", "set-brightness", "feedback", "validate", "preview", "press", "schema"];
 
 pub struct CliError {
     code: &'static str,
@@ -34,7 +34,7 @@ struct Args {
     flags: Vec<(String, String)>,
 }
 
-const BOOL_FLAGS: &[&str] = &["json", "execute", "dry-run", "split", "clear-holds", "alt", "append"];
+const BOOL_FLAGS: &[&str] = &["json", "execute", "dry-run", "split", "clear-holds", "alt", "append", "history"];
 
 fn parse_args(raw: &[String]) -> Result<Args, CliError> {
     let (mut pos, mut flags) = (Vec::new(), Vec::new());
@@ -142,6 +142,65 @@ fn describe(a: &Action) -> String {
     }
 }
 
+/// The running service's state from `status.json` beside the config, or None when no service is running
+/// (file missing, stopped cleanly, or not refreshed for 6 s: the service rewrites it every 2 s).
+fn live_state(config: &std::path::Path) -> Option<Value> {
+    let doc: Value = serde_json::from_str(&std::fs::read_to_string(crate::service::sibling(config, crate::service::STATUS_FILE)).ok()?).ok()?;
+    let age = chrono::Local::now().timestamp_millis() - doc["updated_ms"].as_i64()?;
+    let state = doc["state"].clone();
+    (age < 6000 && state["stopped"].as_bool() != Some(true)).then_some(state)
+}
+
+/// `deckd events [--secs N] [--count N] [--history]`: streams the service's deck events as NDJSON (one JSON object per line).
+/// New events only unless `--history` (also prints what is already in the file). Ends on Ctrl+C, or after `--secs` / `--count`.
+/// Exit 3 when no service is running.
+fn events(a: &Args) -> Result<(), CliError> {
+    use std::io::{BufRead, Seek, SeekFrom, Write};
+    let cfg_path = config_path(a);
+    if live_state(&cfg_path).is_none() {
+        return Err(CliError { code: "service_not_running", message: "no running deckd service (start the window or `deckd serve`)".into(), exit: 3 });
+    }
+    let num = |name: &str| -> Result<Option<u64>, CliError> {
+        a.get(name).map(|v| v.parse::<u64>().map_err(|_| usage(format!("--{name} must be a number")))).transpose()
+    };
+    let (secs, count) = (num("secs")?, num("count")?);
+    let path = crate::service::sibling(&cfg_path, crate::service::EVENTS_NAME);
+    let mut pos = if a.has("history") { 0 } else { std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0) };
+    let (start, mut sent) = (std::time::Instant::now(), 0u64);
+    let stdout = std::io::stdout();
+    loop {
+        if let Ok(mut f) = std::fs::File::open(&path) {
+            let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+            if len < pos {
+                pos = 0; // the service started a fresh file
+            }
+            if len > pos && f.seek(SeekFrom::Start(pos)).is_ok() {
+                let mut r = std::io::BufReader::new(f);
+                let mut line = String::new();
+                while r.read_line(&mut line).unwrap_or(0) > 0 {
+                    if !line.ends_with('\n') {
+                        break; // half-written line: pick it up next round
+                    }
+                    pos += line.len() as u64;
+                    let mut out = stdout.lock();
+                    if writeln!(out, "{}", line.trim_end()).and_then(|_| out.flush()).is_err() {
+                        return Ok(()); // reader went away
+                    }
+                    sent += 1;
+                    line.clear();
+                    if count.is_some_and(|c| sent >= c) {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        if secs.is_some_and(|s| start.elapsed().as_secs() >= s) {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
 /// Runs one agent command; prints the JSON result on stdout.
 pub fn run(cmd: &str, raw: &[String]) -> Result<(), CliError> {
     let a = parse_args(raw)?;
@@ -149,17 +208,21 @@ pub fn run(cmd: &str, raw: &[String]) -> Result<(), CliError> {
         "status" => {
             let path = config_path(&a);
             let loaded = Config::load(&path);
-            // Live connection state needs IPC to the running service (not built yet), so it is reported as unknown.
+            let live = live_state(&path);
             json!({
                 "config": path.display().to_string(),
                 "config_valid": loaded.is_ok(),
                 "config_error": loaded.as_ref().err(),
                 "buttons": loaded.as_ref().map(|c| c.buttons.len()).ok(),
                 "brightness": loaded.as_ref().map(|c| c.brightness).ok(),
-                "deck_connected": null,
-                "note": "deck_connected is unknown until the service exposes IPC; check the deckd window or serve log"
+                "service_running": live.is_some(),
+                "deck_connected": live.as_ref().map(|s| s["connected"].as_bool().unwrap_or(false)),
+                "page": live.as_ref().and_then(|s| s["page"].as_u64()),
+                "deck_info": live.as_ref().and_then(|s| s["info"].as_str().map(str::to_string)),
+                "service_pid": live.as_ref().and_then(|s| s["pid"].as_u64()),
             })
         }
+        "events" => return events(&a),
         "list" => {
             let cfg = load(&a)?;
             json!({"brightness": cfg.brightness, "pages": cfg.page_count(), "buttons": cfg.buttons})
