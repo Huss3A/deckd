@@ -17,6 +17,7 @@
 
 mod actions;
 mod agent;
+mod appicon;
 mod audio;
 mod config;
 mod gui;

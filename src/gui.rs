@@ -330,6 +330,22 @@ impl App {
         self.textures.get(path).cloned().flatten()
     }
 
+    /// The icon of the program a button starts (shown when the button has no picture or symbol of its own).
+    fn app_texture(&mut self, ctx: &egui::Context, b: &Button) -> Option<egui::TextureHandle> {
+        if b.icon.is_some() || b.glyph.is_some() || !b.face.is_image() {
+            return None;
+        }
+        let key = format!("app:{}", crate::appicon::target(b)?.display());
+        if !self.textures.contains_key(&key) {
+            let tex = crate::appicon::image_for(b).map(|img| {
+                let ci = egui::ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw());
+                ctx.load_texture(key.clone(), ci, egui::TextureOptions::LINEAR)
+            });
+            self.textures.insert(key.clone(), tex);
+        }
+        self.textures.get(&key).cloned().flatten()
+    }
+
     fn draw_tile(&mut self, ui: &mut egui::Ui, col: u8, row: u8, pressed: bool, cmds: &mut Vec<TileCmd>) {
         let (tile, gap) = self.tg();
         let th = self.styles.theme.clone();
@@ -401,7 +417,8 @@ impl App {
         } else {
             1.0
         };
-        paint_tile(ui.painter(), rect, b.as_ref(), tex.as_ref(), alpha, th.tile_rounding, th.tile_empty, self.cfg.round_icons);
+        let app_tex = b.as_ref().and_then(|b| self.app_texture(ui.ctx(), b));
+        paint_tile(ui.painter(), rect, b.as_ref(), tex.as_ref(), app_tex.as_ref(), alpha, th.tile_rounding, th.tile_empty, self.cfg.round_icons);
         if b.as_ref().is_some_and(|b| b.pinned) {
             ui.painter().text(rect.right_top() + Vec2::new(-9.0, 10.0), Align2::CENTER_CENTER, "📌", FontId::proportional(12.0), Color32::WHITE);
         }
@@ -453,7 +470,8 @@ impl App {
                 let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("drag_ghost"));
                 let painter = ui.ctx().layer_painter(layer);
                 let r = Rect::from_center_size(p, Vec2::new(tile_width(col, row, tile, gap), tile));
-                paint_tile(&painter, r, own.as_ref(), own_tex.as_ref(), 0.6, th.tile_rounding, th.tile_empty, self.cfg.round_icons);
+                let own_app = own.as_ref().and_then(|b| self.app_texture(ui.ctx(), b));
+                paint_tile(&painter, r, own.as_ref(), own_tex.as_ref(), own_app.as_ref(), 0.6, th.tile_rounding, th.tile_empty, self.cfg.round_icons);
                 painter.rect_stroke(r, th.tile_rounding,Stroke::new(2.0, Color32::from_rgba_unmultiplied(255, 255, 255, 150)), StrokeKind::Inside);
             }
         }
@@ -1586,17 +1604,32 @@ fn rounded_image(p: &egui::Painter, tex: egui::TextureId, rect: Rect, radius: f3
     p.add(egui::Shape::mesh(mesh));
 }
 
-fn paint_tile(p: &egui::Painter, rect: Rect, b: Option<&Button>, tex: Option<&egui::TextureHandle>, a: f32, rounding: f32, empty: Color32, round_img: bool) {
-    let bg = b.and_then(|b| b.color.as_deref()).and_then(parse_rgb).map(c32).unwrap_or(empty);
+fn paint_tile(p: &egui::Painter, rect: Rect, b: Option<&Button>, tex: Option<&egui::TextureHandle>, app: Option<&egui::TextureHandle>, a: f32, rounding: f32, empty: Color32, round_img: bool) {
+    let plate = app.zip(b).filter(|(_, b)| b.color.is_none()).and_then(|(_, b)| crate::appicon::image_for(b)).and_then(|i| crate::appicon::plate_color(&i)).map(c32);
+    let bg = b.and_then(|b| b.color.as_deref()).and_then(parse_rgb).map(c32).or(plate).unwrap_or(empty);
     p.rect_filled(rect, rounding, bg.gamma_multiply(a));
     if let Some(t) = tex {
         rounded_image(p, t.id(), rect, if round_img { rounding } else { 0.0 }, Color32::WHITE.gamma_multiply(a));
     }
+    let label = b.and_then(|b| b.label.as_deref()).filter(|l| !l.trim().is_empty());
+    let gc = b.and_then(|b| b.glyph_color.as_deref()).and_then(parse_rgb).unwrap_or([255, 255, 255]);
+    let gcol = Color32::from_rgb(gc[0], gc[1], gc[2]).gamma_multiply(a);
     if let Some(g) = b.and_then(|b| b.glyph.as_deref()) {
-        let gc = b.and_then(|b| b.glyph_color.as_deref()).and_then(parse_rgb).unwrap_or([255, 255, 255]);
-        p.text(rect.center() - Vec2::new(0.0, 8.0), Align2::CENTER_CENTER, g, FontId::proportional(44.0), Color32::from_rgb(gc[0], gc[1], gc[2]).gamma_multiply(a));
+        let up = if label.is_some() { 8.0 } else { 0.0 };
+        p.text(rect.center() - Vec2::new(0.0, up), Align2::CENTER_CENTER, g, FontId::proportional(44.0), gcol);
+    } else if let (Some(app), None) = (app, tex) {
+        let side = rect.height() * if label.is_some() { 0.6 } else { 0.76 };
+        let cy = if label.is_some() { rect.center().y - rect.height() * 0.04 } else { rect.center().y };
+        let r = Rect::from_center_size(Pos2::new(rect.center().x, cy), Vec2::splat(side));
+        p.image(app.id(), r, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE.gamma_multiply(a));
+    } else if let (Some(l), None) = (label, tex) {
+        if b.is_some_and(|b| b.face.is_image()) {
+            // text-only button: the label is centered in the tile (deckd draws it into the picture)
+            p.text(rect.center(), Align2::CENTER_CENTER, l, FontId::proportional(rect.height() * 0.24), gcol);
+            return;
+        }
     }
-    if let Some(l) = b.and_then(|b| b.label.as_deref()).filter(|l| !l.is_empty()) {
+    if let Some(l) = label {
         // black outline so white text stays readable on light tile colors
         let at = rect.center_bottom() - Vec2::new(0.0, 6.0);
         for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
@@ -1699,9 +1732,31 @@ fn reg(args: &[&str]) -> bool {
     std::process::Command::new("reg.exe").args(args).creation_flags(0x0800_0000).output().is_ok_and(|o| o.status.success())
 }
 
+/// The command the sign-in entry must hold: this exe, started hidden.
+fn autostart_command() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    Some(format!("\"{}\" gui --minimized", exe.display()))
+}
+
 /// Is deckd registered to start when you sign in to Windows?
 fn autostart_enabled() -> bool {
     reg(&["query", RUN_KEY, "/v", "deckd"])
+}
+
+/// Rewrite a sign-in entry that exists but does not match this exe (an older build wrote a `conhost.exe --headless ...` wrapper,
+/// and the exe may have moved), so "Launch on startup" keeps working without toggling it off and on.
+fn heal_autostart() {
+    use std::os::windows::process::CommandExt;
+    let Some(want) = autostart_command() else { return };
+    let Ok(out) = std::process::Command::new("reg.exe").args(["query", RUN_KEY, "/v", "deckd"]).creation_flags(0x0800_0000).output() else { return };
+    if !out.status.success() {
+        return; // not enabled: leave it off
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let current = text.lines().find_map(|l| l.split_once("REG_SZ").map(|(_, v)| v.trim().to_string()));
+    if current.as_deref() != Some(want.as_str()) {
+        set_autostart(true);
+    }
 }
 
 /// Register / remove the sign-in entry (current user only, no admin needed). It starts the window minimized. The release
@@ -1722,6 +1777,7 @@ pub fn run(path: PathBuf) -> Result<(), String> {
     if !crate::tray::single_instance() {
         return Ok(()); // another deckd window is running; it was asked to come forward
     }
+    heal_autostart();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("deckd")

@@ -374,7 +374,8 @@ fn layout_glyphs(font: &FontVec, text: &str, size: f32) -> Result<(Vec<Glyph>, [
 }
 
 /// Draw `text` centered in the area above the label line, shrinking it if it is too wide.
-fn draw_glyph(img: &mut RgbaImage, font: &FontVec, text: &str, color: Rgba<u8>) -> Result<(), String> {
+/// With no label under it (`centered`) the symbol sits in the middle of the tile instead of above the label line.
+fn draw_glyph(img: &mut RgbaImage, font: &FontVec, text: &str, color: Rgba<u8>, centered: bool) -> Result<(), String> {
     let w = img.width();
     let (mut size, max_w) = (110.0f32, w as f32 - 36.0); // 160 on a normal tile
     let (mut glyphs, mut b) = layout_glyphs(font, text, size)?;
@@ -383,7 +384,7 @@ fn draw_glyph(img: &mut RgbaImage, font: &FontVec, text: &str, color: Rgba<u8>) 
         (glyphs, b) = layout_glyphs(font, text, size)?;
     }
     let dx = w as f32 / 2.0 - (b[0] + b[2]) / 2.0;
-    let dy = 78.0 - (b[1] + b[3]) / 2.0; // label text sits along the bottom
+    let dy = if centered { ICON as f32 / 2.0 } else { 78.0 } - (b[1] + b[3]) / 2.0; // label text sits along the bottom
     for g in glyphs {
         if let Some(o) = font.outline_glyph(g) {
             let r = o.px_bounds();
@@ -431,13 +432,91 @@ fn render_icon(b: Option<&Button>, cfg: &Config, font: Option<&FontVec>, w: u32,
     }
     let color = parse_color(b.and_then(|b| b.color.as_deref()).unwrap_or(EMPTY_COLOR))?;
     let mut img = RgbaImage::from_pixel(w, ICON, color);
-    if let (Some(b), Some(font)) = (b, font) {
-        if let Some(glyph) = b.glyph.as_deref() {
+    if let Some(b) = b {
+        let has_label = has_label(b);
+        if let (Some(glyph), Some(font)) = (b.glyph.as_deref(), font) {
             let gc = parse_color(b.glyph_color.as_deref().unwrap_or("#ffffff"))?;
-            draw_glyph(&mut img, font, glyph, gc).map_err(|e| format!("button {:?}: {e}", b.pos))?;
+            draw_glyph(&mut img, font, glyph, gc, !has_label).map_err(|e| format!("button {:?}: {e}", b.pos))?;
+        } else if b.glyph.is_none() && b.face.is_image() {
+            if let Some(app) = crate::appicon::image_for(b) {
+                if b.color.is_none() {
+                    if let Some(c) = crate::appicon::plate_color(&app) {
+                        img = RgbaImage::from_pixel(w, ICON, Rgba([c[0], c[1], c[2], 255])); // the icon's own plate becomes the tile
+                    }
+                }
+                draw_app_icon(&mut img, &app, has_label);
+            } else if let (true, Some(font)) = (has_label, font) {
+                let gc = parse_color(b.glyph_color.as_deref().unwrap_or("#ffffff"))?;
+                draw_centered_label(&mut img, font, b.label.as_deref().unwrap_or(""), gc)?;
+            }
         }
     }
     png_bytes(&img)
+}
+
+fn has_label(b: &Button) -> bool {
+    b.label.as_deref().is_some_and(|l| !l.trim().is_empty())
+}
+
+/// Does deckd paint this button's label into the picture (text-only button, centered) instead of the firmware drawing it
+/// along the bottom? Then the manifest's Text must stay empty so it is not drawn twice.
+fn label_in_picture(b: Option<&Button>, font: Option<&FontVec>) -> bool {
+    let Some(b) = b else { return false };
+    font.is_some() && has_label(b) && b.icon.is_none() && b.glyph.is_none() && b.face.is_image() && crate::appicon::image_for(b).is_none()
+}
+
+/// The text the firmware should draw under the picture.
+fn firmware_text<'a>(b: Option<&'a Button>, font: Option<&FontVec>) -> &'a str {
+    if label_in_picture(b, font) { "" } else { b.and_then(|b| b.label.as_deref()).unwrap_or("") }
+}
+
+/// A program's icon in the middle of the tile (above the label line when there is a label).
+fn draw_app_icon(img: &mut RgbaImage, app: &RgbaImage, has_label: bool) {
+    let (side, cy) = if has_label { (120u32, 74u32) } else { (148u32, ICON / 2) };
+    let side = side.min(app.width().max(app.height()) * 4); // do not blow tiny icons up absurdly
+    let scaled = image::imageops::resize(app, side, side, FilterType::Lanczos3);
+    let x = (img.width() as i64 - side as i64) / 2;
+    image::imageops::overlay(img, &scaled, x, cy as i64 - side as i64 / 2);
+}
+
+/// A label with no picture: large, in the middle of the tile, wrapped on spaces, shrunk to fit.
+fn draw_centered_label(img: &mut RgbaImage, font: &FontVec, text: &str, c: Rgba<u8>) -> Result<(), String> {
+    let (max_w, max_h) = (img.width() as f32 - 28.0, ICON as f32 - 36.0);
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let mut size = 52.0f32;
+    loop {
+        // greedy word wrap at this size
+        let mut lines: Vec<String> = Vec::new();
+        let mut fits = true;
+        for w in &words {
+            let cand = match lines.last() {
+                Some(l) => format!("{l} {w}"),
+                None => w.to_string(),
+            };
+            if lines.last().is_some() && text_w(font, &cand, size)? > max_w {
+                lines.push(w.to_string());
+            } else if lines.is_empty() {
+                lines.push(cand);
+            } else {
+                *lines.last_mut().unwrap() = cand;
+            }
+        }
+        for l in &lines {
+            if text_w(font, l, size)? > max_w {
+                fits = false;
+            }
+        }
+        let total = size * 1.15 * lines.len() as f32;
+        if (fits && total <= max_h) || size <= 10.0 {
+            return text_block(img, font, &lines.join("\n"), c, img.width() as f32 / 2.0, ICON as f32 / 2.0, max_w + 200.0, max_h + 200.0, size);
+        }
+        size *= 0.92;
+    }
+}
+
+fn text_w(font: &FontVec, text: &str, size: f32) -> Result<f32, String> {
+    let b = layout_glyphs(font, text, size)?.1;
+    Ok(b[2] - b[0])
 }
 
 /// The glyph font, read once and cached (live faces redraw every second or so).
@@ -446,9 +525,12 @@ fn load_font(cfg: &Config) -> Result<Option<Arc<FontVec>>, String> {
 }
 
 fn load_font_for(cfg: &Config, buttons: &[Button]) -> Result<Option<Arc<FontVec>>, String> {
-    if !buttons.iter().any(|b| b.glyph.is_some() || b.face.is_live() || b.alt.as_ref().is_some_and(|a| a.glyph.is_some())) {
+    let needs = |b: &Button| b.glyph.is_some() || b.face.is_live() || b.alt.as_ref().is_some_and(|a| a.glyph.is_some());
+    let wants = |b: &Button| has_label(b) || b.alt.as_ref().is_some_and(|a| a.label.is_some());
+    if !buttons.iter().any(|b| needs(b) || wants(b)) {
         return Ok(None);
     }
+    let must = buttons.iter().any(needs);
     static CACHE: Mutex<Option<(String, Arc<FontVec>)>> = Mutex::new(None);
     let mut c = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((path, f)) = c.as_ref() {
@@ -456,8 +538,12 @@ fn load_font_for(cfg: &Config, buttons: &[Button]) -> Result<Option<Arc<FontVec>
             return Ok(Some(f.clone()));
         }
     }
-    let bytes = std::fs::read(&cfg.glyph_font).map_err(|e| format!("glyph_font {}: {e}", cfg.glyph_font))?;
-    let f = Arc::new(FontVec::try_from_vec(bytes).map_err(|e| format!("glyph_font {}: {e}", cfg.glyph_font))?);
+    let loaded = std::fs::read(&cfg.glyph_font).map_err(|e| format!("glyph_font {}: {e}", cfg.glyph_font)).and_then(|bytes| FontVec::try_from_vec(bytes).map_err(|e| format!("glyph_font {}: {e}", cfg.glyph_font)));
+    let f = match loaded {
+        Ok(f) => Arc::new(f),
+        Err(_) if !must => return Ok(None), // only labels want it: the firmware can still draw them
+        Err(e) => return Err(e),
+    };
     *c = Some((cfg.glyph_font.clone(), f.clone()));
     Ok(Some(f))
 }
@@ -524,7 +610,7 @@ pub fn cell_zip(cfg: &Config, page: u8, col: u8, row: u8, rim: Option<([u8; 3], 
     zip.add_directory("Images/", SimpleFileOptions::default().unix_permissions(0o777).last_modified_time(stamp)).map_err(|e| e.to_string())?;
     zip.start_file(&name, opts).map_err(|e| e.to_string())?;
     zip.write_all(&png).map_err(|e| e.to_string())?;
-    let text = b.and_then(|b| b.label.as_deref()).unwrap_or("");
+    let text = firmware_text(b, glyph_font.as_deref());
     let mut cell = json!({"State":0,"ViewParam":[{"Font":font(),"Icon":name,"Text":text}]});
     if (col, row) == (3, 2) {
         cell["SmallViewMode"] = json!(2); // the wide slot shows our picture instead of the firmware clock
@@ -587,7 +673,7 @@ pub fn build_zip_live(cfg: &Config, page: u8, live: &Live) -> Result<Vec<u8>, St
             let name = format!("Images/{col}_{row}_{:016x}.png", fnv1a(&png));
             zip.start_file(&name, opts).map_err(|e| e.to_string())?;
             zip.write_all(&png).map_err(|e| e.to_string())?;
-            let text = b.and_then(|b| b.label.as_deref()).unwrap_or("");
+            let text = firmware_text(b, glyph_font.as_deref());
             let mut cell = json!({"State":0,"ViewParam":[{"Font":font(),"Icon":name,"Text":text}]});
             if row == 2 && col == 3 {
                 cell["SmallViewMode"] = json!(2); // wide slot with our own picture (community docs: mode 2 = background image)
