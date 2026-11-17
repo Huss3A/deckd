@@ -91,6 +91,11 @@ struct App {
     drag: Option<(u8, u8)>,
     /// Cell the dragged button would land on if dropped now.
     drag_hover: Option<(u8, u8)>,
+    /// Page the dragged button came from (the window may switch pages while dragging).
+    drag_page: u8,
+    /// Page tabs as drawn last frame, and which tab the dragged button has been hovering over since when.
+    tab_rects: Vec<(u8, Rect)>,
+    tab_hover: Option<(u8, Instant)>,
     /// Which action slot is currently recording a hotkey ("press" / "double" / "hold").
     recording: Option<String>,
     /// Page being edited (1-based).
@@ -249,6 +254,36 @@ impl App {
         self.changed();
     }
 
+    /// Move the button at `a` on page `sp` to page `dp`: onto cell `b` (swapping with what is there; the other button goes
+    /// to `a` on `sp`), or, with no cell given, onto the first free cell of that page.
+    fn move_across_pages(&mut self, sp: u8, a: (u8, u8), dp: u8, b: Option<(u8, u8)>) {
+        if sp == dp {
+            return;
+        }
+        let cell_of = |btn: &Button| btn.cell().ok();
+        let Some(src) = self.cfg.buttons.iter().position(|x| x.page == sp && cell_of(x) == Some(a)) else {
+            return; // nothing own to move (empty key, or only shown there because it is pinned)
+        };
+        let dest = b.or_else(|| {
+            (0..ROWS).flat_map(|r| (0..COLS).map(move |c| (c, r))).filter_map(|(c, r)| norm_cell(c as i32, r as i32)).find(|c| {
+                !self.cfg.buttons.iter().any(|x| x.page == dp && cell_of(x) == Some(*c))
+            })
+        });
+        let Some(dest) = dest else {
+            self.toast(&format!("Page {dp} is full"));
+            return;
+        };
+        if let Some(other) = self.cfg.buttons.iter().position(|x| x.page == dp && cell_of(x) == Some(dest)) {
+            self.cfg.buttons[other].page = sp;
+            self.cfg.buttons[other].pos = format!("{},{}", a.0, a.1);
+        }
+        self.cfg.buttons[src].page = dp;
+        self.cfg.buttons[src].pos = format!("{},{}", dest.0, dest.1);
+        self.page = dp;
+        self.selected = Some(dest);
+        self.changed();
+    }
+
     fn changed(&mut self) {
         self.dirty_since = Some(Instant::now());
     }
@@ -380,24 +415,38 @@ impl App {
         });
         if resp.drag_started() {
             self.drag = Some((col, row));
+            self.drag_page = self.page;
+            self.tab_hover = None;
         }
         let pointer = ui.ctx().pointer_interact_pos();
         if resp.drag_stopped() {
             self.drag = None;
-            // drop onto another tile = swap the two buttons
-            if let Some(p) = pointer {
+            self.tab_hover = None;
+            let src_page = self.drag_page;
+            let on_tab = pointer.and_then(|p| self.tab_rects.iter().find(|(_, r)| r.contains(p)).map(|(n, _)| *n));
+            if let Some(n) = on_tab {
+                // dropped on a page tab: the button goes to that page (first free key)
+                self.move_across_pages(src_page, (col, row), n, None);
+            } else if let Some(p) = pointer {
+                // drop onto another tile = swap the two buttons (on another page: move it there)
                 let origin = rect.min - Vec2::new(col as f32 * (tile + gap), row as f32 * (tile + gap));
                 let (tc, tr) = (((p.x - origin.x) / (tile + gap)).floor() as i32, ((p.y - origin.y) / (tile + gap)).floor() as i32);
                 if let Some(t) = norm_cell(tc, tr) {
-                    self.swap_cells((col, row), t);
+                    if src_page == self.page {
+                        self.swap_cells((col, row), t);
+                    } else {
+                        let page = self.page;
+                        self.move_across_pages(src_page, (col, row), page, Some(t));
+                    }
                 }
             }
         }
 
         // While dragging over another tile, preview the swap: the two tiles show each other's button.
         let page = self.page;
+        let same_page = self.drag_page == page;
         let swapping = match (self.drag, self.drag_hover) {
-            (Some(s), Some(h)) if s != h => Some((s, h)),
+            (Some(s), Some(h)) if s != h && same_page => Some((s, h)),
             _ => None,
         };
         let shown = match swapping {
@@ -409,7 +458,7 @@ impl App {
         let b = self.cfg.button_at(page, shown.0, shown.1).cloned();
         let tex = b.as_ref().and_then(|b| b.icon.clone()).and_then(|i| self.texture(ui.ctx(), &i));
         let own_tex = if shown == (col, row) { tex.clone() } else { own.as_ref().and_then(|b| b.icon.clone()).and_then(|i| self.texture(ui.ctx(), &i)) };
-        let is_source = self.drag == Some((col, row));
+        let is_source = self.drag == Some((col, row)) && same_page;
         let alpha = if swapping.is_some() && shown != (col, row) {
             0.75 // phased preview of where the other button would land
         } else if is_source {
@@ -418,7 +467,17 @@ impl App {
             1.0
         };
         let app_tex = b.as_ref().and_then(|b| self.app_texture(ui.ctx(), b));
-        paint_tile(ui.painter(), rect, b.as_ref(), tex.as_ref(), app_tex.as_ref(), alpha, th.tile_rounding, th.tile_empty, self.cfg.round_icons);
+        // live faces (clock, stats, weather) show the real picture that is sent to the deck, updating as it changes
+        let live_tex = match b.as_ref() {
+            Some(lb) if lb.face.is_live() => self.preview_texture(ui.ctx(), lb, (col, row) == (3, 2), false),
+            _ => None,
+        };
+        if let Some(t) = &live_tex {
+            let r = if self.cfg.round_icons { th.tile_rounding } else { 0.0 };
+            rounded_image(ui.painter(), t.id(), rect, r, Color32::from_white_alpha((alpha * 255.0) as u8));
+        } else {
+            paint_tile(ui.painter(), rect, b.as_ref(), tex.as_ref(), app_tex.as_ref(), alpha, th.tile_rounding, th.tile_empty, self.cfg.round_icons);
+        }
         if b.as_ref().is_some_and(|b| b.pinned) {
             ui.painter().text(rect.right_top() + Vec2::new(-9.0, 10.0), Align2::CENTER_CENTER, "📌", FontId::proportional(12.0), Color32::WHITE);
         }
@@ -433,11 +492,12 @@ impl App {
             Some(Face::Everything) => Some("time + date + weather"),
             _ => None,
         };
-        if let Some(c) = caption {
+        if let (Some(c), None) = (caption, &live_tex) {
             ui.painter().text(rect.center(), Align2::CENTER_CENTER, c, FontId::proportional(12.0), th.text_dim);
         }
 
-        let is_target = swapping.is_some_and(|(_, h)| h == (col, row) || (is_source && shown != (col, row)));
+        let is_target = swapping.is_some_and(|(_, h)| h == (col, row) || (is_source && shown != (col, row)))
+            || (self.drag.is_some() && !same_page && self.drag_hover == Some((col, row)));
         let selected = self.selected == Some((col, row));
         let stroke = if pressed {
             Stroke::new(3.0, th.press)
@@ -470,8 +530,16 @@ impl App {
                 let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("drag_ghost"));
                 let painter = ui.ctx().layer_painter(layer);
                 let r = Rect::from_center_size(p, Vec2::new(tile_width(col, row, tile, gap), tile));
-                let own_app = own.as_ref().and_then(|b| self.app_texture(ui.ctx(), b));
-                paint_tile(&painter, r, own.as_ref(), own_tex.as_ref(), own_app.as_ref(), 0.6, th.tile_rounding, th.tile_empty, self.cfg.round_icons);
+                // the ghost is the button being dragged, which may come from another page
+                let (ghost, ghost_tex) = if same_page {
+                    (own.clone(), own_tex.clone())
+                } else {
+                    let g = self.cfg.button_at(self.drag_page, col, row).cloned();
+                    let t = g.as_ref().and_then(|b| b.icon.clone()).and_then(|i| self.texture(ui.ctx(), &i));
+                    (g, t)
+                };
+                let own_app = ghost.as_ref().and_then(|b| self.app_texture(ui.ctx(), b));
+                paint_tile(&painter, r, ghost.as_ref(), ghost_tex.as_ref(), own_app.as_ref(), 0.6, th.tile_rounding, th.tile_empty, self.cfg.round_icons);
                 painter.rect_stroke(r, th.tile_rounding,Stroke::new(2.0, Color32::from_rgba_unmultiplied(255, 255, 255, 150)), StrokeKind::Inside);
             }
         }
@@ -1088,22 +1156,21 @@ impl App {
         }
     }
 
-    /// The tile as the deck will show it, rendered by the same code that builds the deck's pictures.
-    fn preview_tile(&mut self, ui: &mut egui::Ui, b: &Button, wide: bool, alt: bool, width: f32) {
-        let height = if wide { width * 196.0 / 458.0 } else { width };
+    /// The picture of a tile as the deck will show it (cached; live faces and GIFs get a new one whenever they change).
+    fn preview_texture(&mut self, ctx: &egui::Context, b: &Button, wide: bool, alt: bool) -> Option<egui::TextureHandle> {
         let mut live = layout::Live::snapshot();
         let gif = b.icon.as_deref().filter(|p| layout::is_gif(p) && !b.face.is_live());
         let mut stamp = if b.face.is_live() { live.now.timestamp() } else { 0 };
         if let (Some(p), true) = (gif, self.cfg.animate_gifs) {
-            live.tick_ms = Self::anim_ms(ui.ctx());
+            live.tick_ms = Self::anim_ms(ctx);
             if let Some((idx, left)) = layout::gif_index_at(&self.cfg.base_dir.join(p), live.tick_ms) {
                 stamp = idx as i64 + 1;
-                ui.ctx().request_repaint_after(Duration::from_millis(left.clamp(16, 1000)));
+                ctx.request_repaint_after(Duration::from_millis(left.clamp(16, 1000)));
             }
         }
         let key = format!("{}|{wide}|{alt}|{stamp}", serde_json::to_string(b).unwrap_or_default());
         if !self.previews.contains_key(&key) {
-            if self.previews.len() > 32 {
+            if self.previews.len() > 48 {
                 self.previews.clear();
             }
             if let Ok(png) = layout::preview_png(&self.cfg, b, wide, alt, &live) {
@@ -1111,14 +1178,21 @@ impl App {
                     let rgba = img.to_rgba8();
                     let size = [rgba.width() as usize, rgba.height() as usize];
                     let ci = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
-                    let tex = ui.ctx().load_texture(format!("preview{}", self.previews.len()), ci, egui::TextureOptions::LINEAR);
+                    let tex = ctx.load_texture(format!("preview{}", self.previews.len()), ci, egui::TextureOptions::LINEAR);
                     self.previews.insert(key.clone(), tex);
                 }
             }
         }
+        self.previews.get(&key).cloned()
+    }
+
+    /// The tile as the deck will show it, rendered by the same code that builds the deck's pictures.
+    fn preview_tile(&mut self, ui: &mut egui::Ui, b: &Button, wide: bool, alt: bool, width: f32) {
+        let height = if wide { width * 196.0 / 458.0 } else { width };
+        let tex = self.preview_texture(ui.ctx(), b, wide, alt);
         let th = &self.styles.theme;
         let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
-        match self.previews.get(&key) {
+        match tex {
             Some(t) => {
                 rounded_image(ui.painter(), t.id(), rect, if self.cfg.round_icons { th.tile_rounding } else { 0.0 }, Color32::WHITE);
             }
@@ -1818,6 +1892,9 @@ pub fn run(path: PathBuf) -> Result<(), String> {
                 drag: None,
                 recording: None,
                 drag_hover: None,
+                drag_page: 1,
+                tab_rects: Vec::new(),
+                tab_hover: None,
                 page: 1,
                 styles,
                 tab: Tab::Look,

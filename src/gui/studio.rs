@@ -247,6 +247,92 @@ impl App {
         }
     }
 
+    /// Page tabs under the deck. Dragging a key over a tab for a moment switches to that page; dropping it on a tab moves it there.
+    fn page_tabs(&mut self, ui: &mut egui::Ui) {
+        let th = self.styles.theme.clone();
+        let count = self.cfg.page_count();
+        let max = crate::config::MAX_PAGES;
+        let last_empty = !self.cfg.buttons.iter().any(|b| b.page == count);
+        let pointer = ui.ctx().pointer_interact_pos();
+        let dragging = self.drag.is_some();
+        // (kind, label): kind 0 = a page, 1 = add, 2 = remove
+        let mut items: Vec<(u8, u8, String)> = Vec::new();
+        for p in 1..=count {
+            let live = self.svc.status.lock().ok().is_some_and(|s| s.connected && s.page == p && count > 1);
+            items.push((0, p, if live { format!("Page {p} ●") } else { format!("Page {p}") }));
+        }
+        if count < max {
+            items.push((1, 0, "+".into()));
+        }
+        if count > 1 && last_empty {
+            items.push((2, 0, "−".into()));
+        }
+        let font = FontId::proportional(th.body_size);
+        let widths: Vec<f32> = items
+            .iter()
+            .map(|(k, _, t)| if *k == 0 { ui.painter().layout_no_wrap(t.clone(), font.clone(), Color32::WHITE).size().x + 30.0 } else { 28.0 })
+            .collect();
+        let total: f32 = widths.iter().sum::<f32>() + 8.0 * (items.len().saturating_sub(1)) as f32;
+        let (row, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 30.0), Sense::hover());
+        let mut x = row.center().x - total / 2.0;
+        let mut rects = Vec::new();
+        let mut hovered_page = None;
+        for (i, (kind, p, text)) in items.iter().enumerate() {
+            let rect = Rect::from_min_size(Pos2::new(x, row.min.y + 1.0), Vec2::new(widths[i], 28.0));
+            x += widths[i] + 8.0;
+            let resp = ui.interact(rect, ui.id().with(("ptab", i)), Sense::click());
+            let over = pointer.is_some_and(|q| rect.contains(q));
+            let sel = *kind == 0 && self.page == *p;
+            let drop_here = dragging && over && *kind == 0 && self.page != *p;
+            let fill = if sel { th.accent } else if drop_here || (resp.hovered() && !dragging) { th.hover } else { th.card };
+            let color = if sel { th.accent_text } else if *kind == 0 { th.text_dim } else { th.text };
+            ui.painter().rect_filled(rect, egui::CornerRadius::same(255), fill);
+            if drop_here {
+                ui.painter().rect_stroke(rect, egui::CornerRadius::same(255), Stroke::new(2.0, th.ok), egui::StrokeKind::Inside);
+            }
+            ui.painter().text(rect.center(), Align2::CENTER_CENTER, text, if *kind == 0 { font.clone() } else { FontId::proportional(th.body_size + 3.0) }, color);
+            match kind {
+                0 => {
+                    rects.push((*p, rect));
+                    if dragging && over {
+                        hovered_page = Some(*p);
+                    }
+                    if resp.clicked() {
+                        self.page = *p;
+                    }
+                }
+                1 if resp.clone().on_hover_text("Add a page").clicked() => {
+                    self.cfg.pages = count + 1;
+                    self.page = count + 1;
+                    self.changed();
+                }
+                2 if resp.on_hover_text("Remove the last page (it is empty)").clicked() => {
+                    self.cfg.pages = count - 1;
+                    self.page = self.page.min(count - 1);
+                    self.changed();
+                }
+                _ => {}
+            }
+        }
+        self.tab_rects = rects;
+        // hovering a dragged key over another page's tab for a moment switches to it
+        match hovered_page {
+            Some(p) if p != self.page => {
+                let since = match self.tab_hover {
+                    Some((q, t)) if q == p => t,
+                    _ => Instant::now(),
+                };
+                self.tab_hover = Some((p, since));
+                if since.elapsed() >= Duration::from_millis(450) {
+                    self.page = p;
+                    self.tab_hover = None;
+                }
+                ui.ctx().request_repaint_after(Duration::from_millis(50));
+            }
+            _ => self.tab_hover = None,
+        }
+    }
+
     /// Top bar: brand, pages, connection, undo/redo, brightness, settings.
     pub(super) fn studio_top(&mut self, ui: &mut egui::Ui) {
         let th = self.styles.theme.clone();
@@ -259,29 +345,9 @@ impl App {
                 ui.painter().circle_stroke(r.center(), 6.0, Stroke::new(2.0, th.accent_text));
                 ui.label(RichText::new("deckd").strong().size(th.heading_size + 2.0));
                 ui.add_space(14.0);
-                // pages
                 let count = self.cfg.page_count();
                 if self.page > count {
                     self.page = count;
-                }
-                for p in 1..=count {
-                    let live = self.svc.status.lock().ok().is_some_and(|s| s.connected && s.page == p && count > 1);
-                    let sel = self.page == p;
-                    let t = RichText::new(if live { format!("Page {p} ●") } else { format!("Page {p}") }).strong().color(if sel { th.accent_text } else { th.text_dim });
-                    if ui.add(egui::Button::new(t).fill(if sel { th.accent } else { th.card }).stroke(Stroke::NONE).corner_radius(egui::CornerRadius::same(255)).min_size(Vec2::new(0.0, 28.0))).clicked() {
-                        self.page = p;
-                    }
-                }
-                if count < crate::config::MAX_PAGES && ui.add(egui::Button::new("+").min_size(Vec2::new(28.0, 28.0)).corner_radius(egui::CornerRadius::same(255))).on_hover_text("Add a page").clicked() {
-                    self.cfg.pages = count + 1;
-                    self.page = count + 1;
-                    self.changed();
-                }
-                let last_empty = !self.cfg.buttons.iter().any(|b| b.page == count);
-                if count > 1 && last_empty && ui.add(egui::Button::new("−").min_size(Vec2::new(28.0, 28.0)).corner_radius(egui::CornerRadius::same(255))).on_hover_text("Remove the last page (it is empty)").clicked() {
-                    self.cfg.pages = count - 1;
-                    self.page = self.page.min(count - 1);
-                    self.changed();
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.add(egui::Button::new("⚙").min_size(Vec2::new(32.0, 30.0))).on_hover_text("Settings and window style").clicked() {
@@ -426,7 +492,9 @@ impl App {
         let deck_h = 3.0 * t + 2.0 * t * ratio;
         ui.add_space(((ah - deck_h) * 0.3).max(8.0));
         self.deck_panel(ui, cmds);
-        ui.add_space(12.0);
+        ui.add_space(14.0);
+        self.page_tabs(ui);
+        ui.add_space(10.0);
         ui.vertical_centered(|ui| {
             ui.label(RichText::new("The wide bottom-right key is the deck's clock slot; it can also be a normal button.").size(th.small_size).color(th.text_dim));
         });
