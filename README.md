@@ -28,7 +28,7 @@ Working and verified on the real deck:
 - Config file `deck.toml`, hot reload, reconnect when the deck drops.
 - GUI window (egui): clickable deck, button editor, brightness, live status/log. Edits save to `deck.toml`; the service re-uploads.
 
-Not done: see Goals 3-6. Known: GUI needs UX refinement; saving rewrites `deck.toml` (comments are lost).
+`deck.toml` is managed by the app: hand edits are picked up live, but saving from the window or CLI rewrites the file, so comments are not kept.
 
 ## Using it
 
