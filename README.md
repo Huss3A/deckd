@@ -1,21 +1,21 @@
 # deckd
 
 > **AI disclosure:** the majority of this project's code was written with AI assistance,
-> directed and tested on real hardware by the owner. Treat it accordingly: read the code before you trust it with
+> directed and tested on real hardware by the author. Treat it accordingly: read the code before you trust it with
 > anything important, and expect rough edges.
 
 A lightweight Rust replacement for Ulanzi Studio, for personal use with my own **Ulanzi D200H** deck
 (USB `2207:0019`). Single ~7 MB executable instead of a ~200 MB Qt/WebEngine app.
 
-Protocol knowledge lives in [NOTES.md](NOTES.md). Instructions for AI agents working on or with this project: [AGENTS.md](AGENTS.md).
+Protocol knowledge lives in [NOTES.md](NOTES.md).
 
 ## Goals
 
 1. **Replace Ulanzi Studio** with more granular control and a lighter footprint. *(core done, see Status)*
 2. **A GUI** to design the deck: click a button, set label / color / symbol / image / action. *(done, needs refinement)*
-3. **A CLI for agents.** AI agents should be able to inspect and change the deck, simulate presses, preview layouts and read
-   events without a GUI, with machine-readable output and safe defaults. *(offline commands built: status, list, get, set, clear,
-   set-brightness, validate, preview, press, schema; live `events`/connection status need IPC; see [AGENTS.md](AGENTS.md))*
+3. **A scriptable CLI.** Inspect and change the deck, simulate presses and preview layouts without the GUI, with JSON output and
+   safe defaults. *(offline commands built: status, list, get, set, clear, set-brightness, validate, preview, press, schema;
+   live `events` / connection status are not built yet)*
 4. Run at login, hidden, no console window. *(built: Settings > Launch on Startup, tray icon, close hides to the tray)*
 5. Wide slot control: clock / date / weather / system stats / image or GIF. *(built)*
 6. Multi-page layouts, double-tap and hold actions, macros, pinned keys, real program icons for `run` buttons. *(built)*
@@ -52,7 +52,7 @@ compete for it: run only one at a time.
 | `deckd listen\|run [secs]` | Print button events (`run` also sends the heartbeat) |
 | `deckd brightness <0-100>` | Set brightness |
 | `deckd upload\|patch <zip> [secs]` | Send a raw layout ZIP (debugging) |
-| `deckd status\|list\|get\|set\|clear\|set-brightness\|validate\|preview\|press\|schema` | Agent CLI: JSON output, file based, see AGENTS.md |
+| `deckd status\|list\|get\|set\|clear\|set-brightness\|validate\|preview\|press\|schema` | Scriptable CLI: JSON output, file based (`deckd schema` prints the config schema) |
 
 ## Config (`deck.toml`)
 
@@ -155,11 +155,10 @@ that feeds the deck; per-button rim colors sit next to the gesture they belong t
 | `src/actions.rs` | run / open / hotkey / media execution |
 | `src/service.rs` | Background service: connect, upload, events, reload, reconnect |
 | `src/gui.rs` | egui window |
-| `src/agent.rs` | Agent CLI commands (JSON, exit codes) |
+| `src/agent.rs` | Scriptable CLI commands (JSON, exit codes) |
 | `src/main.rs` | CLI entry |
 | `tools/hook_hid.js` | Frida hook that logged Ulanzi Studio's HID traffic |
-| `tools/*.py`, `tools/*.ps1` | Early test scripts |
-| `captures/` | Captured traffic and real layout ZIPs from Ulanzi Studio |
+| `tools/*.py` | Small test scripts |
 
 ## License
 

@@ -47,8 +47,7 @@ Status key: **[verified]** = tested on my unit (own client or captured from Ulan
 ## Layout ZIP gotchas **[verified]**
 - **Entry timestamps must be current.** The Rust `zip` crate's default 1980-01-01 timestamp makes the deck ignore the images
   (only the manifest `Text` labels show). Same content re-written by Python with the current time showed every icon.
-  `layout.rs` sets `last_modified_time(now)`. (Bisect: `tools/make_bisect.py`, `captures/bisect*.zip`.)
-- **Image filenames must change when the picture changes.** The deck keeps the first image it unpacked under a given name and
+  `layout.rs` sets `last_modified_time(now)`.- **Image filenames must change when the picture changes.** The deck keeps the first image it unpacked under a given name and
   ignores later ones with the same name (labels still update because the manifest is re-read). Symptom: edits to color/symbol/
   image never show, and a new button whose position name already held a default image stays blank. `layout.rs` now names
   images `Images/<col>_<row>_<fnv1a-64 of the PNG>.png`; the stock app uses a fresh uuid each time. **[verified]**
@@ -67,17 +66,17 @@ Status key: **[verified]** = tested on my unit (own client or captured from Ulan
   rims restore the *current* frame. Stats come from `sysstats.rs` (GetSystemTimes + GlobalMemoryStatusEx, once a second, 60 samples).
 - Firmware faces on the wide slot: `clock` = manifest `SmallViewMode` 1, `stats` = `SmallViewMode` 0 (no icon) and heartbeat mode 0 with
   `cpu`/`mem` percent in fields 2-3 (community docs, unverified on the deck), heartbeat every 1 s in stats mode.
-- Wide slot own picture (mode 2) is verified working (owner, 2026-11-14). Added crates: `gif` (image feature), no others.
+- Wide slot own picture (mode 2) is verified working. Added crates: `gif` (image feature), no others.
 
-## Wide slot as a button (built 2026-11-14; picture mode and tap/hold verified by the owner)
+## Wide slot as a button (picture mode and tap/hold verified on the deck)
 - Config pos `"3,2"` is the wide slot (`"4,2"` is rejected). With no button there, the layout keeps the firmware clock (`SmallViewMode` 1,
   heartbeat mode 1). With a button, the cell is `{"SmallViewMode":2, ..., "Icon": <458x196 png>}` and the heartbeat's first field is 2.
   Both come from community docs only; if the deck shows nothing / a broken slot, that is the first suspect.
-- **Double tap on the wide slot is impossible (measured 2026-11-14, 5 beep-cued taps):** single, double and triple taps all gave the
+- **Double tap on the wide slot is impossible (measured with 5 timed taps):** single, double and triple taps all gave the
   same two pairs (`c8` then `c9`, once `c8` twice, ~0.2 s apart). The deck does not report extra taps; counting burst pairs as presses
   would turn every single tap into a double. Use tap and hold only. Other apps: racerxdl/ulanzi-d200-linux documents the slot as button
   14 (index 13) usable as a normal button alongside its stats/GIF display, but says nothing about the state bytes or gestures.
-- Events: the burst filter was REMOVED at the owner's request (nothing is dropped; every wide-slot down/up is a real press/release; see git history for the filter). Expect one physical tap to look like 2-3 quick taps.
+- Events: there is no burst filter (nothing is dropped; every wide-slot down/up is a real press/release). Expect one physical tap to look like 2-3 quick taps.
   wide slot may not work: the burst lasts ~0.9 s and the filter ignores presses within 0.7 s of the last event. Test and adjust.
 
 ## Wide slot (button 13, manifest cell `3_2`) **[doc, not yet tested on my deck]**
@@ -91,16 +90,16 @@ Status key: **[verified]** = tested on my unit (own client or captured from Ulan
 
 ## Incoming
 - `0x0101` button event **[verified]**: payload = `[state, index, 0x01, pressed]` (bytes 8..11); `pressed` is 1 down / 0 up.
-  - Buttons 0-12 send state `0x01`. Index 13 is the wide clock slot and it behaves differently. **Decoded 2026-11-14** (timestamped
-    `deckd run` captures with beep-cued actions; owner confirmed it is ONE button, left/middle/right gave the same patterns):
+  - Buttons 0-12 send state `0x01`. Index 13 is the wide clock slot and it behaves differently. **Decoded** (timestamped
+    `deckd run` captures; it is ONE button, touching the left, middle or right gave the same patterns):
     - It is silent when untouched (25 s idle: no events), so the stream is not caused by our heartbeat.
     - **Short tap = a burst** of quick DOWN/up pairs (~100 ms each, ~370 ms apart) whose state steps `c8, c9, ca` (longer bursts seen
       with the full cycle `c8 c9 ca cb 00 02 64 01`, likely the firmware's own display-mode values; mapping unproven).
     - **Long press (>~1 s) = one DOWN (`c8`) ... one up whose state is `01`**, duration matches the real press (hold 2 s -> 2.3 s).
     - A slide (touch left, drag right) gave one DOWN `c8` ... up `c8` ~1 s later.
     - Plan for using it as a button: treat a burst (gap < ~700 ms between events) as ONE tap, a DOWN with no up for > ~300 ms as a
-      hold (release = the up). Not implemented. Open: why the burst, whether the display changes on tap (owner to say).
-  - **Mapping verified** (numbered test layout, `tools/make_map_test.ps1`): index = row*5 + col, i.e. `col_row` key `c_r` -> index `r*5 + c`.
+      hold (release = the up). Not implemented. Open: why the burst, whether the display changes on tap.
+  - **Mapping verified** (numbered test layout): index = row*5 + col, i.e. `col_row` key `c_r` -> index `r*5 + c`.
     Top row = 0-4, middle row = 5-9, bottom row = 10-12 (cols 0-2), wide slot `3_2` (+ hidden `4_2`) = 13.
 - `0x0102` button event **[doc]**, `0x010B` firmware asks for the layout to be re-sent **[doc]**.
 
@@ -109,25 +108,23 @@ Status key: **[verified]** = tested on my unit (own client or captured from Ulan
 - `tools/hook_hid.js`: Frida hook for UlanziDeck.exe (logs WriteFile/ReadFile traffic, reassembles uploaded ZIPs into `captures/`).
   How it was used: launch Ulanzi Studio normally, attach with REA's `start_frida_session` (attach, by pid), `load_frida_script`, then
   replug the deck / change brightness / edit buttons in the app; read `captures/traffic.log`. Close the Frida session and Studio afterwards.
-- `tools/make_map_test.ps1` (numbered cells, used to verify the button mapping), `tools/make_bisect.py` (mixes stock and own ZIP parts;
-  how the timestamp problem was found), `tools/listen.py`, `tools/brightness.py` (early Python tests).
+- `tools/listen.py`, `tools/brightness.py` (early Python tests).
 - USBPcap + Wireshark were installed but never used: the xHCI root hubs are AMD USB 3 and need USBPcap's `-I` registry step plus a reboot.
 
 ## Pages and gestures (deckd feature, not protocol)
 - A page is just another full layout ZIP; a `page` action makes the service upload that page's ZIP (same mechanism as a config reload).
 - Double tap / hold are timed host-side from the `0x0101` down/up events (debounce 40 ms, double window 350 ms, hold 500 ms).
-  Needs reliable "up" events (seen working for buttons 0-12). Tap / double / hold **verified on the deck 2026-11-14** (via `print` actions).
+  Needs reliable "up" events (seen working for buttons 0-12). Tap / double / hold **verified on the deck** (via `print` actions).
 - Holds are a list of steps (`holds`, each with `ms`); on release the group with the longest `ms` reached runs. Same-`ms` steps chain
-  into one macro (sequential, 60 ms apart, own thread); `split` steps start parallel macros. Hard-split meaning was my interpretation
-  (owner asked for "a hard split" without defining it). Not yet verified on the deck.
-- **Rim glow [verified on the deck 2026-11-14]**: no LEDs; the rim is drawn into the button's picture and sent as a one-cell partial
+  into one macro (sequential, 60 ms apart, own thread); `split` steps start parallel macros. Not yet verified on the deck.
+- **Rim glow [verified on the deck]**: no LEDs; the rim is drawn into the button's picture and sent as a one-cell partial
   update (`0x000D`, same ZIP shape as the stock app's: `Images/` dir entry + one PNG + manifest with just that cell). The deck accepts
-  it with no barrier packets, and a 10 px rim was visible (owner confirmed). Restoring = sending the normal tile again (same hashed
+  it with no barrier packets, and a 10 px rim was visible. Restoring = sending the normal tile again (same hashed
   filename as in the full layout). The icon also appeared to "shrink" during the first test (unexplained, maybe the deck's own
   reaction to a cell update). `deckd glowtest [col,row]` is the standalone experiment; `deckd rimpreview <out.png>` renders a rimmed
   tile offline (rim is a rounded-rect distance field: solid band, 6 px fade, black outside the rounded corner). Wired into the service as `[feedback]`
   in deck.toml (per-gesture colors, width, duration; a repeat keeps its rim until release).
-- `hold` fires on **release** (down >= 500 ms), not at the 0.5 s mark (owner preference 2026-11-14; changed from fire-at-threshold).
+- `hold` fires on **release** (down >= 500 ms), not at the 0.5 s mark (rather than at the 0.5 s mark).
 - `repeat`: starts 400 ms after press, then every `repeat_ms` until the release event; stops after 20 s regardless (lost-release safety).
   Not yet verified on the deck.
 - GUI gotcha: a text field plus a button wider than a resizable egui side panel made the panel grow every frame
@@ -137,6 +134,18 @@ Status key: **[verified]** = tested on my unit (own client or captured from Ulan
 - The GUI saves `deck.toml` (debounced 0.5 s, atomic temp+rename); the service thread polls the file mtime every 1 s, re-uploads the full
   layout and re-sends brightness. A bad edit is rejected before saving (same validation as the service, incl. rendering the ZIP).
 - The service also re-uploads when the deck sends `0x010B` **[doc, never seen on my unit]**.
+
+## Display and startup notes
+- **Launch on startup**: an older build registered `conhost.exe --headless "...deckd.exe" gui --minimized` under HKCU `Run\deckd`, which
+  showed "on" in settings but did not start the app at sign-in. The window now rewrites that value to
+  `"<this exe>" gui --minimized` at launch whenever it exists but differs (this also covers a moved exe).
+- **Tile pictures**: a button with no icon and no symbol whose tap action is `run <exe>` (bare names are looked up on PATH) or `open <exe|lnk>`
+  shows that program's shell icon (`src/appicon.rs`, 256 px jumbo icon, cropped to its visible part). Setting an icon or symbol overrides it.
+- **Centering**: icon/symbol without a label is centered vertically; with a label it sits above the firmware's bottom label line.
+  A label with no picture is drawn by deckd into the PNG (centered, word-wrapped, shrunk to fit, uses `glyph_font`) and the manifest `Text`
+  is sent empty so it is not drawn twice. If `glyph_font` cannot be read the label falls back to the firmware's bottom text.
+- Store-style icons (a glyph on an opaque square plate) make the tile take the plate's color, so no square shows; an explicit `color` wins.
+- Store/UWP apps launched via `explorer shell:...` have no exe to read, so they keep the plain tile.
 
 ## Sources
 - redphx/strmdck (Python, MIT): https://github.com/redphx/strmdck

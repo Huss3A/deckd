@@ -136,7 +136,7 @@ fn main() {
             println!("wrote {out} ({} bytes)", zip.len());
             Ok(())
         }),
-        // Experiment (owner approved 2026-11-14): flash a colored rim on one button with partial updates (0x000D).
+        // Experiment: flash a colored rim on one button with partial updates (0x000D).
         // usage: deckd glowtest [col,row] [deck.toml]   (close the window / other deck users first)
         Some("glowtest") => Config::load(&config_path(2)).and_then(|cfg| {
             let (col, row): (u8, u8) = arg(1)

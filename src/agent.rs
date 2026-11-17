@@ -1,5 +1,5 @@
-//! Agent CLI: non-interactive commands with JSON output, stable exit codes and safe defaults.
-//! Contract is documented in AGENTS.md. Everything here works without the deck (file based).
+//! Scriptable CLI: non-interactive commands with JSON output, stable exit codes and safe defaults.
+//! Everything here works without the deck (file based); `deckd schema` prints the config schema.
 //!
 //! Exit codes: 0 ok, 1 internal error, 2 usage error, 3 deck not connected, 4 config invalid.
 

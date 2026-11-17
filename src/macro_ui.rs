@@ -1,6 +1,6 @@
 //! The "Step Rail": the macro step list. Slim numbered rows between a start and an end cap, a one-bar timeline,
 //! an insert "+" between rows, a searchable picker (Ctrl+K), inline step editing, validation badges, drag reorder
-//! and an estimate-driven test-run playhead. See MACRO-DESIGN.md. All colors come from the window style (`Theme`).
+//! and an estimate-driven test-run playhead. All colors come from the window style (`Theme`).
 
 use crate::actions;
 use crate::config::{self, Action, MACRO_MAX_STEPS};

@@ -1,5 +1,5 @@
 //! The window shell: top bar, action library (left), deck canvas (middle), inspector (right). All floating cards on a dark
-//! canvas, in the spirit of the mockups in MACRO-DESIGN.md. Colors and sizes come from the window style.
+//! canvas. Colors and sizes come from the window style.
 
 use super::*;
 
